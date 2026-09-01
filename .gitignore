@@ -1,0 +1,17 @@
+.DS_Store
+**/.DS_Store
+**/.env
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Documents et archives fournis pour le travail local
+FICHE-SUJET.pdf
+SLIDES-THEORIE.pdf
+eds-chu-sujet.zip
+
+# Données sources et fichiers générés localement
+source-filestorage/
+data/source-filestorage/
+data/lake/
+tmp/
