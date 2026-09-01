@@ -18,6 +18,7 @@ services:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./lake:/var/lib/clickhouse/user_files/lake:ro
 
     ulimits:
       nofile:
@@ -54,6 +55,30 @@ services:
     volumes:
       - ./source-filestorage:/app/source-filestorage:ro
       - ./lake:/app/lake
+
+  bronze-loader:
+    profiles:
+      - tools
+    build:
+      context: ./pipeline
+    command:
+      - python
+      - load_bronze.py
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-eds_admin}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Définir CLICKHOUSE_PASSWORD dans .env}
+      LAKE_ROOT: /app/lake
+      SQL_ROOT: /app/sql
+    volumes:
+      - ./lake:/app/lake:ro
+      - ./clickhouse/init:/app/sql:ro
+    networks:
+      - eds-network
 
 volumes:
   clickhouse-data:

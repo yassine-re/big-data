@@ -25,7 +25,7 @@ pandas.
 
 - [x] Étape 1 - initialiser le dépôt et ClickHouse avec Docker
 - [x] Étape 2 - copier et pseudonymiser les fichiers dans le lake
-- [ ] Étape 3 - charger les fichiers dans Bronze
+- [x] Étape 3 - charger les fichiers dans Bronze
 - [ ] Étape 4 - transformer Bronze vers Silver en SQL
 - [ ] Étape 5 - construire Gold en SQL
 - [ ] Étape 6 - planifier et tracer le pipeline

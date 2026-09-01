@@ -87,8 +87,91 @@ lake/
 ### Limites de cette étape
 
 - une nouvelle exécution réécrit atomiquement les fichiers cibles ;
-- l'incrémentalité, les checksums et la table de traçabilité seront ajoutés plus tard ;
-- aucune donnée n'est encore chargée dans Bronze.
+- le lake ne conserve pas encore l'historique d'un fichier modifié sous le même chemin.
+
+## Étape 3 - chargement dans Bronze
+
+Le service `bronze-loader` ne lit pas les lignes dans Python. Il découvre les fichiers,
+calcule leur checksum SHA-256 puis demande à ClickHouse de les lire avec la fonction SQL
+`file()`.
+
+| Table | Grain Bronze | Format lu par ClickHouse |
+|---|---|---|
+| `bronze.patients` | un patient par snapshot | CSV |
+| `bronze.stays` | un séjour source | CSV |
+| `bronze.stay_diagnoses` | un diagnostic par séjour | JSON + `ARRAY JOIN` |
+| `bronze.monitoring` | un relevé par séjour et horodatage | Parquet |
+| `bronze.services` | un code service | CSV |
+| `bronze.cim10` | un code diagnostic | CSV |
+
+Bronze conserve les valeurs reçues après pseudonymisation et ajoute à chaque ligne :
+
+- `source_day` ;
+- `source_file` ;
+- `file_checksum` ;
+- `batch_id` ;
+- `ingested_at`.
+
+Les dates de séjour restent volontairement en texte avec le suffixe `_raw`. Une date
+incorrecte pourra ainsi être détectée et rejetée en Silver sans faire échouer tout le
+chargement Bronze. Le monitoring conserve les types numériques et temporels du Parquet.
+
+### Idempotence
+
+`control.ingested_files` enregistre l'état de chaque chargement. Le `batch_id` est calculé
+de manière déterministe à partir du chemin et du checksum :
+
+```text
+même chemin + même contenu -> même batch_id -> fichier ignoré
+même chemin + contenu modifié -> nouveau batch_id -> nouveau chargement
+```
+
+### Exécution
+
+Le lake doit avoir été créé par l'étape 2. Lancer ensuite :
+
+```bash
+docker compose up -d clickhouse
+docker compose run --rm --build bronze-loader
+```
+
+Une seconde exécution doit afficher uniquement des lignes `SKIPPED`.
+
+Validation réalisée sur les fichiers fournis :
+
+```text
+Premier chargement : 14 fichiers SUCCESS, 135 275 lignes Bronze
+Rejeu identique    : 0 fichier chargé, 14 fichiers SKIPPED
+Colonnes directement identifiantes dans Bronze : 0
+```
+
+Pour consulter les fichiers chargés dans l'interface SQL :
+
+```sql
+SELECT
+    source_file,
+    status,
+    rows_loaded,
+    file_checksum
+FROM control.v_ingested_files_current
+ORDER BY source_day, source_file;
+```
+
+Pour consulter les volumes Bronze :
+
+```sql
+SELECT database, table, total_rows
+FROM system.tables
+WHERE database = 'bronze'
+ORDER BY table;
+```
+
+### Limites de cette étape
+
+- aucune règle de qualité métier n'est encore appliquée ;
+- les répétitions d'un patient entre plusieurs snapshots sont conservées dans Bronze ;
+- la déduplication fonctionnelle et les rejets seront traités en SQL dans Silver ;
+- la planification et la journalisation globale du pipeline restent à ajouter.
 
 Pour arrêter ClickHouse sans supprimer ses volumes :
 

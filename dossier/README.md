@@ -84,9 +84,34 @@ Le traitement a été validé sur les 14 fichiers fournis. Les sorties ne contie
 les colonnes directement identifiantes et les pseudonymes sont cohérents entre les
 séjours, les diagnostics et le monitoring.
 
-### 4.2 Traitements à venir
+### 4.2 Chargement Bronze actuellement implémenté
 
-- chargement des fichiers du lake dans des tables Bronze typées ;
+ClickHouse lit directement les fichiers pseudonymisés avec la fonction SQL `file()`.
+Python se limite à découvrir les fichiers, calculer leur checksum et envoyer les requêtes
+SQL. Les lignes ne sont pas chargées dans une structure pandas.
+
+| Table Bronze | Contenu |
+|---|---|
+| `bronze.patients` | snapshots patients pseudonymisés |
+| `bronze.stays` | séjours avec dates et modes conservés comme valeurs brutes |
+| `bronze.stay_diagnoses` | diagnostics aplatis par `ARRAY JOIN` dans ClickHouse |
+| `bronze.monitoring` | constantes typées lues directement depuis Parquet |
+| `bronze.services` | référentiel des services |
+| `bronze.cim10` | référentiel des diagnostics |
+
+Chaque ligne contient le jour source, le chemin du fichier, son checksum, un identifiant
+de lot et l'horodatage de chargement. La table `control.ingested_files` empêche de charger
+deux fois un fichier ayant le même chemin et le même contenu.
+
+Les dates de séjour restent en texte dans Bronze. Cette décision permet de conserver une
+ligne mal formée jusqu'aux contrôles Silver au lieu de faire échouer l'ensemble du lot.
+
+Le test de chargement a enregistré 14 fichiers au statut `SUCCESS` et 135 275 lignes
+Bronze. Un rejeu identique a ignoré les 14 fichiers sans modifier les volumes. Le schéma
+Bronze ne contient aucune colonne directement identifiante.
+
+### 4.3 Traitements à venir
+
 - contrôles qualité, déduplication et cohérence des jointures dans Silver ;
 - calcul des indicateurs dans Gold ;
 - planification, journalisation, traçabilité et reprise sur incident.
@@ -121,10 +146,10 @@ visualisation n'est annoncée comme terminée à cette étape.
 
 ## 7. Limites et recommandations actuelles
 
-- le lake est rejouable mais ne gère pas encore les nouveaux fichiers de manière
-  incrémentale ;
+- le lake réécrit un fichier existant sous le même chemin et ne conserve pas encore ses
+  anciennes versions ;
 - aucun contrôle de qualité métier n'est encore appliqué ;
-- aucune donnée n'est encore disponible dans Bronze, Silver ou Gold ;
+- aucune donnée n'est encore disponible dans Silver ou Gold ;
 - les seuils d'alerte du monitoring seront appliqués plus tard en SQL selon les bornes
   données dans le sujet ;
 - les règles et chiffres finaux devront rester justifiables par leur fichier source et
