@@ -110,11 +110,42 @@ Le test de chargement a enregistré 14 fichiers au statut `SUCCESS` et 135 275 l
 Bronze. Un rejeu identique a ignoré les 14 fichiers sans modifier les volumes. Le schéma
 Bronze ne contient aucune colonne directement identifiante.
 
-### 4.3 Traitements à venir
+### 4.3 Transformation Silver actuellement implémentée
 
-- contrôles qualité, déduplication et cohérence des jointures dans Silver ;
+La transformation est exécutée avec des requêtes `INSERT ... SELECT` dans ClickHouse.
+Python calcule l'identifiant de l'exécution, transmet le SQL et journalise son statut ;
+il ne charge jamais les lignes métier en mémoire.
+
+Silver conserve une ligne canonique par patient, séjour et référentiel, une ligne par
+diagnostic de séjour et une ligne par relevé de monitoring. Les traitements comprennent :
+
+- la sélection du dernier snapshot disponible et la déduplication ;
+- la normalisation des codes, libellés, sexes, modes et types de diagnostic ;
+- la conversion des dates de séjour et le calcul de leur durée en minutes ;
+- la vérification des liens patient–séjour, service–séjour, séjour–diagnostic et
+  séjour–monitoring ;
+- le contrôle des plages techniques du monitoring ;
+- l'enregistrement des rejets et avertissements avec leur fichier, jour et lot source.
+
+Les plages 20–250 pour la fréquence cardiaque, 50–100 pour la SpO2 et 30–45 °C pour la
+température servent à éliminer les valeurs techniquement impossibles. Les seuils d'alerte
+clinique seront distincts et calculés dans Gold.
+
+La publication utilise des tables de versions et des vues. Une exécution en cours ou en
+échec n'est pas visible : les vues `silver.*` continuent de présenter la dernière
+exécution réussie. Le rejeu d'une même version avec les mêmes lots Bronze est ignoré.
+
+Sur les données fournies, Silver publie 122 721 lignes : 6 000 patients, 8 services,
+10 codes CIM-10, 14 864 séjours, 37 040 diagnostics et 64 799 relevés. Les 4 329
+événements qualité restent consultables dans `silver.quality_events`. Les vues finales
+ne contiennent aucune sortie antérieure à l'admission, valeur de monitoring hors plage
+technique ou diagnostic orphelin.
+
+### 4.4 Traitements à venir
+
 - calcul des indicateurs dans Gold ;
-- planification, journalisation, traçabilité et reprise sur incident.
+- planification périodique de la collecte et des transformations ;
+- journalisation globale du pipeline et procédure de reprise sur incident.
 
 ## 5. Indicateurs attendus
 
@@ -148,9 +179,9 @@ visualisation n'est annoncée comme terminée à cette étape.
 
 - le lake réécrit un fichier existant sous le même chemin et ne conserve pas encore ses
   anciennes versions ;
-- aucun contrôle de qualité métier n'est encore appliqué ;
-- aucune donnée n'est encore disponible dans Silver ou Gold ;
+- les horodatages sans fuseau explicite sont actuellement interprétés en UTC ;
+- aucune donnée n'est encore disponible dans Gold ;
 - les seuils d'alerte du monitoring seront appliqués plus tard en SQL selon les bornes
-  données dans le sujet ;
+  métier retenues ;
 - les règles et chiffres finaux devront rester justifiables par leur fichier source et
   leur date de traitement.

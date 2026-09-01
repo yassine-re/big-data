@@ -80,6 +80,28 @@ services:
     networks:
       - eds-network
 
+  silver-transformer:
+    profiles:
+      - tools
+    build:
+      context: ./pipeline
+    command:
+      - python
+      - transform_silver.py
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-eds_admin}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Définir CLICKHOUSE_PASSWORD dans .env}
+      SQL_ROOT: /app/clickhouse
+    volumes:
+      - ./clickhouse:/app/clickhouse:ro
+    networks:
+      - eds-network
+
 volumes:
   clickhouse-data:
   clickhouse-logs:
