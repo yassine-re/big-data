@@ -1,0 +1,2 @@
+ijson==3.4.0.post0
+pyarrow==21.0.0

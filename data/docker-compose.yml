@@ -40,6 +40,21 @@ services:
     networks:
       - eds-network
 
+  lake-loader:
+    profiles:
+      - tools
+    network_mode: none
+    build:
+      context: ./pipeline
+    environment:
+      SOURCE_ROOT: /app/source-filestorage
+      LAKE_ROOT: /app/lake
+      HMAC_PATIENT_SECRET: ${HMAC_PATIENT_SECRET:?Définir HMAC_PATIENT_SECRET dans .env}
+      HMAC_STAY_SECRET: ${HMAC_STAY_SECRET:?Définir HMAC_STAY_SECRET dans .env}
+    volumes:
+      - ./source-filestorage:/app/source-filestorage:ro
+      - ./lake:/app/lake
+
 volumes:
   clickhouse-data:
   clickhouse-logs:
