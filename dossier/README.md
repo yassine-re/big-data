@@ -80,7 +80,7 @@ Les pseudonymes sont déterministes : un même identifiant produit la même clé
 différents fichiers et permet donc les futures jointures. Les secrets restent en dehors
 du dépôt Git.
 
-Le traitement a été validé sur les 14 fichiers fournis. Les sorties ne contiennent plus
+Le traitement a été validé sur les 89 fichiers fournis. Les sorties ne contiennent plus
 les colonnes directement identifiantes et les pseudonymes sont cohérents entre les
 séjours, les diagnostics et le monitoring.
 
@@ -106,8 +106,8 @@ deux fois un fichier ayant le même chemin et le même contenu.
 Les dates de séjour restent en texte dans Bronze. Cette décision permet de conserver une
 ligne mal formée jusqu'aux contrôles Silver au lieu de faire échouer l'ensemble du lot.
 
-Le test de chargement a enregistré 14 fichiers au statut `SUCCESS` et 135 275 lignes
-Bronze. Un rejeu identique a ignoré les 14 fichiers sans modifier les volumes. Le schéma
+Le test de chargement a enregistré 89 fichiers au statut `SUCCESS` et 79 316 lignes
+Bronze. Un rejeu identique a ignoré les 89 fichiers sans modifier les volumes. Le schéma
 Bronze ne contient aucune colonne directement identifiante.
 
 ### 4.3 Transformation Silver actuellement implémentée
@@ -127,8 +127,7 @@ Les traitements comprennent :
 
 - la sélection du dernier snapshot disponible et la déduplication ;
 - la normalisation des codes, libellés, sexes, modes et types de diagnostic ;
-- la conversion des dates de séjour, le calcul de leur durée en minutes et de l'âge
-  approximatif du patient à l'admission ;
+- la conversion des dates de séjour et le calcul de leur durée en minutes ;
 - le calcul de l'indicateur individuel de réadmission dans les 30 jours suivant la sortie
   du séjour précédent ;
 - la vérification des liens patient–séjour, service–séjour, séjour–diagnostic et
@@ -146,22 +145,22 @@ agrégations quotidiennes seront construites dans Gold.
 
 `fact_stay_diagnoses` contient le `patient_sk` récupéré depuis le séjour. Un diagnostic
 peut ainsi être relié directement à `dim_patients` pour constituer une cohorte. L'âge
-individuel est calculé dans `fact_stays` avec la formule
-`année d'admission - année de naissance`. Il est nommé `age_at_admission_approx`, car la
-suppression de la date de naissance complète entraîne une précision à un an près. Les
-tranches d'âge et les distributions agrégées seront construites dans Gold.
+individuel est stocké au même grain dans `age_at_diagnosis_approx` et calculé avec la
+formule `année d'admission du séjour - année de naissance`. La suppression de la date de
+naissance complète entraîne une précision à un an près. Les tranches d'âge et les
+distributions agrégées seront construites dans Gold.
 
 Les traitements Gold sélectionneront uniquement le `run_id` retourné par
 `control.v_latest_successful_silver_run`. Une exécution en cours ou en échec n'est donc
 pas utilisée. Le rejeu d'une même version avec les mêmes lots Bronze est ignoré.
 
-Sur les données fournies, Silver publie 122 721 lignes : 6 000 patients, 8 services,
-10 codes CIM-10, 14 864 séjours, 37 040 diagnostics et 64 799 relevés. Les 4 329
+Sur les données fournies, Silver publie 65 743 lignes : 6 000 patients, 8 services,
+13 codes CIM-10, 6 729 séjours, 12 593 diagnostics et 40 400 relevés. Les 1 573
 événements qualité restent consultables dans `silver.fact_quality_events`. Les tables du
 dernier `run_id` réussi ne contiennent aucune sortie antérieure à l'admission, valeur de
 monitoring hors plage technique ou diagnostic orphelin.
 
-Les enrichissements Silver identifient 748 réadmissions à 30 jours et 5 192 relevés en
+Les enrichissements Silver identifient 780 réadmissions à 30 jours et 3 270 relevés en
 alerte. Les compteurs unitaires des séjours, diagnostics et relevés permettront de
 construire les sommes et taux Gold sans recompter les grains.
 
@@ -204,7 +203,7 @@ visualisation n'est annoncée comme terminée à cette étape.
 - le lake réécrit un fichier existant sous le même chemin et ne conserve pas encore ses
   anciennes versions ;
 - les horodatages sans fuseau explicite sont actuellement interprétés en UTC ;
-- l'âge à l'admission est approximatif à un an près ;
+- l'âge associé au diagnostic est approximatif à un an près ;
 - les requêtes sur Silver doivent sélectionner le dernier `run_id` réussi ;
 - aucune donnée n'est encore disponible dans Gold ;
 - les seuils d'alerte `monitoring-alert-v1` devront être validés par le métier avant un

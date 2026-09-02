@@ -178,7 +178,6 @@ valid_stays AS
         stay.service_code,
         stay.admission_ts,
         stay.discharge_ts,
-        toUInt8(toYear(stay.admission_ts) - patient.birth_year) AS age_at_admission_approx,
         stay.admission_mode,
         CAST(nullIf(stay.discharge_mode, ''), 'Nullable(String)') AS discharge_mode,
         toUInt8(stay.discharge_ts IS NULL) AS is_ongoing,
@@ -225,7 +224,6 @@ SELECT
     service_code,
     admission_ts,
     discharge_ts,
-    age_at_admission_approx,
     admission_mode,
     discharge_mode,
     toUInt8(1),
@@ -404,6 +402,7 @@ SELECT
     stay.patient_sk,
     diagnosis.code_cim10,
     diagnosis.diagnosis_type,
+    toUInt8(toYear(stay.admission_ts) - patient.birth_year),
     toUInt8(1),
     diagnosis.source_day,
     diagnosis.source_file,
@@ -412,10 +411,16 @@ SELECT
 FROM prepared AS diagnosis
 INNER JOIN
 (
-    SELECT stay_sk, patient_sk
+    SELECT stay_sk, patient_sk, admission_ts
     FROM silver.fact_stays FINAL
     WHERE run_id = toUUID('{{RUN_ID}}')
 ) AS stay ON diagnosis.stay_sk = stay.stay_sk
+INNER JOIN
+(
+    SELECT patient_sk, birth_year
+    FROM silver.dim_patients FINAL
+    WHERE run_id = toUUID('{{RUN_ID}}')
+) AS patient ON stay.patient_sk = patient.patient_sk
 WHERE diagnosis.row_num = 1
   AND diagnosis.diagnosis_type IN ('principal', 'associe')
   AND diagnosis.code_cim10 IN
