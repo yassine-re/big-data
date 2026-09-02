@@ -123,7 +123,7 @@ def discover_lake_files(lake_root: Path) -> list[LakeFile]:
 
 def apply_schema(client: ClickHouseClient, sql_root: Path) -> None:
     for name in ("10_control.sql", "20_bronze.sql"):
-        sql_file = sql_root / name
+        sql_file = sql_root / "init" / name
         if not sql_file.is_file():
             raise FileNotFoundError(f"Script SQL introuvable: {sql_file}")
         for statement in sql_file.read_text(encoding="utf-8").split(";"):
@@ -290,7 +290,7 @@ def load_file(client: ClickHouseClient, file: LakeFile) -> str:
 
 def main() -> None:
     lake_root = Path(os.getenv("LAKE_ROOT", "/app/lake"))
-    sql_root = Path(os.getenv("SQL_ROOT", "/app/sql"))
+    sql_root = Path(os.getenv("SQL_ROOT", "/app/clickhouse"))
     client = ClickHouseClient()
     apply_schema(client, sql_root)
 

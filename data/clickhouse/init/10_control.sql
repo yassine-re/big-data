@@ -114,3 +114,57 @@ FROM control.v_gold_runs_current
 WHERE status = 'SUCCESS'
 ORDER BY finished_at DESC
 LIMIT 1;
+
+CREATE TABLE IF NOT EXISTS control.pipeline_runs
+(
+    pipeline_run_id UUID,
+    pipeline_version LowCardinality(String),
+    trigger_type LowCardinality(String),
+    status LowCardinality(String),
+    started_at DateTime64(6, 'UTC'),
+    finished_at Nullable(DateTime64(6, 'UTC')),
+    error_message Nullable(String),
+    updated_at DateTime64(6, 'UTC')
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY pipeline_run_id;
+
+CREATE VIEW IF NOT EXISTS control.v_pipeline_runs_current AS
+SELECT
+    pipeline_run_id,
+    argMax(pipeline_version, updated_at) AS pipeline_version,
+    argMax(trigger_type, updated_at) AS trigger_type,
+    argMax(status, updated_at) AS status,
+    argMax(started_at, updated_at) AS started_at,
+    argMax(tuple(finished_at), updated_at).1 AS finished_at,
+    argMax(tuple(error_message), updated_at).1 AS error_message,
+    max(updated_at) AS last_updated_at
+FROM control.pipeline_runs
+GROUP BY pipeline_run_id;
+
+CREATE TABLE IF NOT EXISTS control.pipeline_step_runs
+(
+    pipeline_run_id UUID,
+    step_order UInt8,
+    step_name LowCardinality(String),
+    status LowCardinality(String),
+    started_at DateTime64(6, 'UTC'),
+    finished_at Nullable(DateTime64(6, 'UTC')),
+    error_message Nullable(String),
+    updated_at DateTime64(6, 'UTC')
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (pipeline_run_id, step_order);
+
+CREATE VIEW IF NOT EXISTS control.v_pipeline_step_runs_current AS
+SELECT
+    pipeline_run_id,
+    step_order,
+    argMax(step_name, updated_at) AS step_name,
+    argMax(status, updated_at) AS status,
+    argMax(started_at, updated_at) AS started_at,
+    argMax(tuple(finished_at), updated_at).1 AS finished_at,
+    argMax(tuple(error_message), updated_at).1 AS error_message,
+    max(updated_at) AS last_updated_at
+FROM control.pipeline_step_runs
+GROUP BY pipeline_run_id, step_order;

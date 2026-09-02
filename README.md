@@ -4,10 +4,10 @@ Projet Big Data M2 organisé selon les deux livrables de la fiche sujet.
 
 ## Organisation
 
-| Dossier | Livrable |
-|---|---|
+| Dossier    | Livrable                                                |
+| ---------- | ------------------------------------------------------- |
 | `dossier/` | Partie 1 - dossier de conception et interface d'analyse |
-| `data/` | Partie 2 - automatisation du pipeline de données |
+| `data/`    | Partie 2 - automatisation du pipeline de données        |
 
 ## Architecture cible
 
@@ -27,8 +27,8 @@ pandas.
 - [x] Étape 2 - copier et pseudonymiser les fichiers dans le lake
 - [x] Étape 3 - charger les fichiers dans Bronze
 - [x] Étape 4 - transformer Bronze vers Silver en SQL
-- [ ] Étape 5 - construire Gold en SQL
-- [ ] Étape 6 - planifier et tracer le pipeline
+- [x] Étape 5 - construire Gold en SQL
+- [x] Étape 6 - planifier et tracer le pipeline
 - [ ] Étape 7 - construire les dashboards et le cloisonnement Metabase
 
 Chaque étape fait l'objet d'un commit dédié et d'une mise à jour du README concerné.

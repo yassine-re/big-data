@@ -41,18 +41,25 @@ flowchart LR
     silver[ClickHouse Silver<br/>nettoyage et qualité]
     gold[ClickHouse Gold<br/>indicateurs par usage]
     metabase[Metabase<br/>dashboards]
+    scheduler[Planificateur quotidien]
+    runner[Orchestrateur Python]
 
     source -->|Python| lake
     lake --> bronze
     bronze -->|SQL ClickHouse| silver
     silver -->|SQL ClickHouse| gold
     gold --> metabase
+    scheduler --> runner
+    runner -.->|pilote| lake
+    runner -.->|pilote| bronze
+    runner -.->|pilote| silver
+    runner -.->|pilote| gold
 ```
 
 Choix retenus :
 
 - le filestorage est monté en lecture seule afin de ne jamais modifier les dépôts du CHU ;
-- Python copie les fichiers, applique la pseudonymisation obligatoire et pilotera les
+- Python copie les fichiers, applique la pseudonymisation obligatoire et pilote les
   chargements et les requêtes ;
 - ClickHouse exécute les transformations Bronze vers Silver puis Gold en SQL ;
 - aucune transformation métier ne sera réalisée en mémoire avec pandas ;
@@ -177,6 +184,23 @@ même version et le même Silver est ignoré. Les groupes cliniques de moins de 
 patients sont signalés par `is_suppressed` et leurs mesures sont remplacées par `NULL`
 avant toute exposition à l'outil de visualisation.
 
+### 4.5 Orchestration et planification actuellement implémentées
+
+Un orchestrateur Python lance successivement la copie vers le lake, le chargement Bronze,
+la transformation Silver puis la transformation Gold. Il s'arrête à la première erreur ;
+les mécanismes d'idempotence permettent au lancement suivant de reprendre sans republier
+les traitements déjà réussis.
+
+Deux tables ClickHouse complètent les traces propres à chaque couche :
+`control.pipeline_runs` conserve le statut global et le type de déclenchement, tandis que
+`control.pipeline_step_runs` conserve le statut de chacune des quatre étapes. Les heures,
+les erreurs et un `pipeline_run_id` commun permettent de reconstituer chaque cycle.
+
+Le pipeline peut être lancé manuellement ou quotidiennement par un service Docker. Son
+heure est configurable et fixée par défaut à 02:00 UTC. Les tests couvrent un lancement
+manuel réussi, un lancement planifié réussi et un échec contrôlé arrêté dès la première
+étape avec son message d'erreur.
+
 ## 5. Indicateurs attendus
 
 Les indicateurs viennent du besoin métier et sont maintenant calculés dans Gold.
@@ -222,6 +246,10 @@ visualisation n'est annoncée comme terminée à cette étape.
   `FINAL` ;
 - les seuils d'alerte `monitoring-alert-v1` devront être validés par le métier avant un
   usage réel ;
+- l'heure de planification est exprimée en UTC et doit être adaptée aux contraintes
+  d'exploitation du CHU ;
+- si ClickHouse est indisponible, l'échec ne peut être inscrit dans ClickHouse et doit
+  être diagnostiqué avec les logs Docker ;
 - la DMS exclut les séjours en cours et la réadmission est attribuée au service de la
   nouvelle admission ;
 - une suppression secondaire devra compléter le masquage simple des petites cohortes

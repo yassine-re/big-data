@@ -73,10 +73,10 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-eds_admin}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Définir CLICKHOUSE_PASSWORD dans .env}
       LAKE_ROOT: /app/lake
-      SQL_ROOT: /app/sql
+      SQL_ROOT: /app/clickhouse
     volumes:
       - ./lake:/app/lake:ro
-      - ./clickhouse/init:/app/sql:ro
+      - ./clickhouse:/app/clickhouse:ro
     networks:
       - eds-network
 
@@ -120,6 +120,67 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Définir CLICKHOUSE_PASSWORD dans .env}
       SQL_ROOT: /app/clickhouse
     volumes:
+      - ./clickhouse:/app/clickhouse:ro
+    networks:
+      - eds-network
+
+  pipeline-runner:
+    profiles:
+      - tools
+    build:
+      context: ./pipeline
+    command:
+      - python
+      - run_pipeline.py
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-eds_admin}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Définir CLICKHOUSE_PASSWORD dans .env}
+      HMAC_PATIENT_SECRET: ${HMAC_PATIENT_SECRET:?Définir HMAC_PATIENT_SECRET dans .env}
+      HMAC_STAY_SECRET: ${HMAC_STAY_SECRET:?Définir HMAC_STAY_SECRET dans .env}
+      SOURCE_ROOT: /app/source-filestorage
+      LAKE_ROOT: /app/lake
+      SQL_ROOT: /app/clickhouse
+      PIPELINE_TRIGGER_TYPE: MANUAL
+    volumes:
+      - ./source-filestorage:/app/source-filestorage:ro
+      - ./lake:/app/lake
+      - ./clickhouse:/app/clickhouse:ro
+    networks:
+      - eds-network
+
+  pipeline-scheduler:
+    profiles:
+      - scheduler
+    restart: unless-stopped
+    build:
+      context: ./pipeline
+    command:
+      - python
+      - schedule_pipeline.py
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-eds_admin}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Définir CLICKHOUSE_PASSWORD dans .env}
+      HMAC_PATIENT_SECRET: ${HMAC_PATIENT_SECRET:?Définir HMAC_PATIENT_SECRET dans .env}
+      HMAC_STAY_SECRET: ${HMAC_STAY_SECRET:?Définir HMAC_STAY_SECRET dans .env}
+      SOURCE_ROOT: /app/source-filestorage
+      LAKE_ROOT: /app/lake
+      SQL_ROOT: /app/clickhouse
+      PIPELINE_SCHEDULE_TIME_UTC: ${PIPELINE_SCHEDULE_TIME_UTC:-02:00}
+      PIPELINE_RUN_ON_STARTUP: ${PIPELINE_RUN_ON_STARTUP:-false}
+      PIPELINE_MAX_RUNS: ${PIPELINE_MAX_RUNS:-0}
+    volumes:
+      - ./source-filestorage:/app/source-filestorage:ro
+      - ./lake:/app/lake
       - ./clickhouse:/app/clickhouse:ro
     networks:
       - eds-network

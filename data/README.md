@@ -171,7 +171,8 @@ ORDER BY table;
 - aucune règle de qualité métier n'est encore appliquée ;
 - les répétitions d'un patient entre plusieurs snapshots sont conservées dans Bronze ;
 - la déduplication fonctionnelle et les rejets seront traités en SQL dans Silver ;
-- la planification et la journalisation globale du pipeline restent à ajouter.
+- la traçabilité détaillée des fichiers est complétée par la journalisation globale
+  décrite à l'étape 6.
 
 ## Étape 4 - transformation Bronze vers Silver
 
@@ -325,8 +326,7 @@ même relevé peut apparaître dans plusieurs catégories.
 - les seuils `monitoring-alert-v1` sont des règles projet à faire valider par le métier
   avant un usage réel ;
 - Gold calcule les taux et agrégations à partir des indicateurs individuels Silver ;
-- l'orchestration est rejouable et journalisée, mais sa planification périodique sera
-  ajoutée dans une étape dédiée.
+- l'orchestration globale rejouable et planifiée est décrite à l'étape 6.
 
 ## Étape 5 - transformation Silver vers Gold
 
@@ -435,6 +435,119 @@ publiés sans leurs mesures. Aucun doublon n'est présent aux quatre grains Gold
   suppression secondaire avant un usage réel ou une diffusion externe ;
 - les tables Gold doivent être lues avec le `run_id` de
   `control.v_latest_successful_gold_run` et avec `FINAL`.
+
+## Étape 6 - orchestration, planification et traçabilité
+
+Le service `pipeline-runner` exécute les étapes dans cet ordre :
+
+```text
+lake_copy -> bronze_load -> silver_transform -> gold_transform
+```
+
+Toutes les étapes restent responsables de leur traitement. L'orchestrateur ne déplace
+aucune donnée et ne calcule aucun indicateur : il appelle leurs fonctions Python, arrête
+le cycle à la première erreur et enregistre les statuts dans ClickHouse.
+
+### Traçabilité
+
+| Objet de contrôle | Rôle |
+|---|---|
+| `control.pipeline_runs` | statut global, type de déclenchement et erreur finale |
+| `control.pipeline_step_runs` | statut et erreur de chacune des quatre étapes |
+| `control.ingested_files` | détail des fichiers Bronze et de leurs checksums |
+| `control.silver_runs` | version, empreinte Bronze et publication Silver |
+| `control.gold_runs` | version, `silver_run_id` consommé et publication Gold |
+
+Les vues suffixées par `_current` utilisent l'état le plus récent de chaque exécution.
+Les statuts possibles sont `RUNNING`, `SUCCESS` et `FAILED`. Chaque lancement global a
+un nouveau `pipeline_run_id`, y compris lorsque toutes les étapes internes sont ignorées
+par leur mécanisme d'idempotence.
+
+Pour examiner les derniers lancements :
+
+```sql
+SELECT
+    pipeline_run_id,
+    trigger_type,
+    status,
+    started_at,
+    finished_at,
+    error_message
+FROM control.v_pipeline_runs_current
+ORDER BY started_at DESC;
+```
+
+Pour afficher les étapes du dernier lancement :
+
+```sql
+WITH (
+    SELECT pipeline_run_id
+    FROM control.v_pipeline_runs_current
+    ORDER BY started_at DESC
+    LIMIT 1
+) AS latest_pipeline_run
+SELECT
+    step_order,
+    step_name,
+    status,
+    started_at,
+    finished_at,
+    error_message
+FROM control.v_pipeline_step_runs_current
+WHERE pipeline_run_id = latest_pipeline_run
+ORDER BY step_order;
+```
+
+Les mêmes événements sont écrits sur la sortie standard et restent consultables avec
+les logs Docker.
+
+### Lancement manuel
+
+Depuis `data/` :
+
+```bash
+docker compose run --rm --build pipeline-runner
+```
+
+Ce lancement est enregistré avec `trigger_type = 'MANUAL'`.
+
+### Planification quotidienne
+
+La variable `PIPELINE_SCHEDULE_TIME_UTC` configure l'heure quotidienne au format
+`HH:MM`. Sa valeur par défaut est `02:00` UTC. Démarrer le service persistant avec :
+
+```bash
+docker compose --profile scheduler up -d --build pipeline-scheduler
+docker compose logs -f pipeline-scheduler
+```
+
+Les lancements du planificateur portent `trigger_type = 'SCHEDULED'`. Par défaut, le
+pipeline attend la prochaine heure planifiée après un redémarrage. Pour lancer également
+un cycle au démarrage, définir `PIPELINE_RUN_ON_STARTUP=true`. `PIPELINE_MAX_RUNS=0`
+signifie que le planificateur fonctionne sans limite ; une valeur positive est utile
+uniquement pour les tests.
+
+### Erreurs et reprise
+
+Une exception marque l'étape et le pipeline `FAILED`, conserve un message limité à
+4 000 caractères et empêche le lancement des étapes suivantes. Le planificateur reste
+actif et tentera un nouveau cycle à l'échéance suivante. Les traitements existants sont
+idempotents : les fichiers et publications déjà réussis sont ignorés lors de la reprise.
+
+Si ClickHouse lui-même est indisponible, aucune trace ne peut être écrite dans ses tables ;
+les logs Docker constituent alors la trace de secours à examiner avant de relancer le
+service.
+
+Une seule instance du planificateur doit être active. Cette version ne possède pas de
+verrou distribué empêchant un lancement manuel de chevaucher un lancement planifié.
+
+Validation réalisée :
+
+- un lancement manuel `SUCCESS` avec quatre étapes réussies ;
+- un lancement planifié `SUCCESS` identifié comme `SCHEDULED` ;
+- un rejeu sans nouvelle donnée avec 89 fichiers Bronze, Silver et Gold ignorés ;
+- un échec contrôlé sur un secret HMAC invalide, limité à `lake_copy` et correctement
+  journalisé aux deux niveaux.
 
 Pour arrêter ClickHouse sans supprimer ses volumes :
 
