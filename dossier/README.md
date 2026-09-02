@@ -116,8 +116,14 @@ La transformation est exécutée avec des requêtes `INSERT ... SELECT` dans Cli
 Python calcule l'identifiant de l'exécution, transmet le SQL et journalise son statut ;
 il ne charge jamais les lignes métier en mémoire.
 
-Silver conserve une ligne canonique par patient, séjour et référentiel, une ligne par
-diagnostic de séjour et une ligne par relevé de monitoring. Les traitements comprennent :
+Silver utilise directement la nomenclature du modèle analytique : `dim_patients`,
+`dim_services`, `dim_cim10`, `fact_stays`, `fact_stay_diagnoses` et `fact_monitoring`.
+La table technique des anomalies est nommée `fact_quality_events`. Chacune contient son
+`run_id` ; aucune table intermédiaire suffixée par `_versions` n'est utilisée.
+
+Pour chaque exécution, Silver conserve une ligne canonique par patient, séjour et
+référentiel, une ligne par diagnostic de séjour et une ligne par relevé de monitoring.
+Les traitements comprennent :
 
 - la sélection du dernier snapshot disponible et la déduplication ;
 - la normalisation des codes, libellés, sexes, modes et types de diagnostic ;
@@ -131,15 +137,15 @@ Les plages 20–250 pour la fréquence cardiaque, 50–100 pour la SpO2 et 30–
 température servent à éliminer les valeurs techniquement impossibles. Les seuils d'alerte
 clinique seront distincts et calculés dans Gold.
 
-La publication utilise des tables de versions et des vues. Une exécution en cours ou en
-échec n'est pas visible : les vues `silver.*` continuent de présenter la dernière
-exécution réussie. Le rejeu d'une même version avec les mêmes lots Bronze est ignoré.
+Les traitements Gold sélectionneront uniquement le `run_id` retourné par
+`control.v_latest_successful_silver_run`. Une exécution en cours ou en échec n'est donc
+pas utilisée. Le rejeu d'une même version avec les mêmes lots Bronze est ignoré.
 
 Sur les données fournies, Silver publie 122 721 lignes : 6 000 patients, 8 services,
 10 codes CIM-10, 14 864 séjours, 37 040 diagnostics et 64 799 relevés. Les 4 329
-événements qualité restent consultables dans `silver.quality_events`. Les vues finales
-ne contiennent aucune sortie antérieure à l'admission, valeur de monitoring hors plage
-technique ou diagnostic orphelin.
+événements qualité restent consultables dans `silver.fact_quality_events`. Les tables du
+dernier `run_id` réussi ne contiennent aucune sortie antérieure à l'admission, valeur de
+monitoring hors plage technique ou diagnostic orphelin.
 
 ### 4.4 Traitements à venir
 
@@ -180,6 +186,7 @@ visualisation n'est annoncée comme terminée à cette étape.
 - le lake réécrit un fichier existant sous le même chemin et ne conserve pas encore ses
   anciennes versions ;
 - les horodatages sans fuseau explicite sont actuellement interprétés en UTC ;
+- les requêtes sur Silver doivent sélectionner le dernier `run_id` réussi ;
 - aucune donnée n'est encore disponible dans Gold ;
 - les seuils d'alerte du monitoring seront appliqués plus tard en SQL selon les bornes
   métier retenues ;

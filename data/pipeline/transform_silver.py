@@ -10,7 +10,7 @@ from uuid import UUID, uuid5
 
 
 RUN_NAMESPACE = UUID("15f93989-c6a1-47bd-a876-30a9fbebdd0c")
-TRANSFORMATION_VERSION = "silver-v1"
+TRANSFORMATION_VERSION = "silver-v2"
 
 
 class ClickHouseClient:
@@ -155,17 +155,17 @@ def count_rows(client: ClickHouseClient, run_id: UUID) -> int:
     return int(
         client.scalar(
             "SELECT sum(rows) FROM ("
-            f"SELECT count() AS rows FROM silver.patient_versions FINAL WHERE run_id = toUUID({run}) "
+            f"SELECT count() AS rows FROM silver.dim_patients FINAL WHERE run_id = toUUID({run}) "
             "UNION ALL "
-            f"SELECT count() AS rows FROM silver.service_versions FINAL WHERE run_id = toUUID({run}) "
+            f"SELECT count() AS rows FROM silver.dim_services FINAL WHERE run_id = toUUID({run}) "
             "UNION ALL "
-            f"SELECT count() AS rows FROM silver.cim10_versions FINAL WHERE run_id = toUUID({run}) "
+            f"SELECT count() AS rows FROM silver.dim_cim10 FINAL WHERE run_id = toUUID({run}) "
             "UNION ALL "
-            f"SELECT count() AS rows FROM silver.stay_versions FINAL WHERE run_id = toUUID({run}) "
+            f"SELECT count() AS rows FROM silver.fact_stays FINAL WHERE run_id = toUUID({run}) "
             "UNION ALL "
-            f"SELECT count() AS rows FROM silver.stay_diagnosis_versions FINAL WHERE run_id = toUUID({run}) "
+            f"SELECT count() AS rows FROM silver.fact_stay_diagnoses FINAL WHERE run_id = toUUID({run}) "
             "UNION ALL "
-            f"SELECT count() AS rows FROM silver.monitoring_versions FINAL WHERE run_id = toUUID({run})"
+            f"SELECT count() AS rows FROM silver.fact_monitoring FINAL WHERE run_id = toUUID({run})"
             ") FORMAT TabSeparated"
         )
     )
@@ -174,7 +174,7 @@ def count_rows(client: ClickHouseClient, run_id: UUID) -> int:
 def count_quality_events(client: ClickHouseClient, run_id: UUID) -> int:
     return int(
         client.scalar(
-            "SELECT count() FROM silver.quality_event_versions FINAL "
+            "SELECT count() FROM silver.fact_quality_events FINAL "
             f"WHERE run_id = toUUID({sql_string(str(run_id))}) FORMAT TabSeparated"
         )
     )

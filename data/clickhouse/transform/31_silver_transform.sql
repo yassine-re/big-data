@@ -1,7 +1,7 @@
 -- Ce fichier ne contient que des INSERT ... SELECT exécutés dans ClickHouse.
 -- Le pilote Python remplace {{RUN_ID}} par l'identifiant déterministe de l'exécution.
 
-INSERT INTO silver.service_versions
+INSERT INTO silver.dim_services
 WITH latest AS
 (
     SELECT
@@ -30,7 +30,7 @@ WHERE row_num = 1
   AND notEmpty(service_code)
   AND notEmpty(service_label);
 
-INSERT INTO silver.cim10_versions
+INSERT INTO silver.dim_cim10
 WITH latest AS
 (
     SELECT
@@ -59,7 +59,7 @@ WHERE row_num = 1
   AND notEmpty(code_cim10)
   AND notEmpty(diagnosis_label);
 
-INSERT INTO silver.patient_versions
+INSERT INTO silver.dim_patients
 WITH latest AS
 (
     SELECT
@@ -93,7 +93,7 @@ WHERE row_num = 1
   AND sex IN ('F', 'M')
   AND notEmpty(region_code);
 
-INSERT INTO silver.quality_event_versions
+INSERT INTO silver.fact_quality_events
 WITH latest AS
 (
     SELECT
@@ -139,7 +139,7 @@ WHERE row_num = 1
       OR empty(region_code)
   );
 
-INSERT INTO silver.stay_versions
+INSERT INTO silver.fact_stays
 WITH latest AS
 (
     SELECT
@@ -196,11 +196,11 @@ WHERE admission_ts IS NOT NULL
   AND admission_mode IN ('urgence', 'programme', 'mutation')
   AND (empty(discharge_mode) OR discharge_mode IN ('domicile', 'mutation', 'transfert', 'deces'))
   AND patient_sk IN
-      (SELECT patient_sk FROM silver.patient_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+      (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
   AND service_code IN
-      (SELECT service_code FROM silver.service_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
+      (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
-INSERT INTO silver.quality_event_versions
+INSERT INTO silver.fact_quality_events
 WITH latest AS
 (
     SELECT
@@ -242,7 +242,7 @@ SELECT
         admission_mode NOT IN ('urgence', 'programme', 'mutation'), 'INVALID_ADMISSION_MODE',
         NOT empty(discharge_mode) AND discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'), 'INVALID_DISCHARGE_MODE',
         patient_sk NOT IN
-            (SELECT patient_sk FROM silver.patient_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'UNKNOWN_PATIENT',
+            (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'UNKNOWN_PATIENT',
         'UNKNOWN_SERVICE'
     ),
     'ERROR',
@@ -253,7 +253,7 @@ SELECT
         admission_mode NOT IN ('urgence', 'programme', 'mutation'), 'Mode d’admission inconnu',
         NOT empty(discharge_mode) AND discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'), 'Mode de sortie inconnu',
         patient_sk NOT IN
-            (SELECT patient_sk FROM silver.patient_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'Patient absent de Silver',
+            (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'Patient absent de Silver',
         'Service absent de Silver'
     ),
     source_day,
@@ -267,11 +267,11 @@ WHERE admission_ts IS NULL
    OR admission_mode NOT IN ('urgence', 'programme', 'mutation')
    OR (NOT empty(discharge_mode) AND discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'))
    OR patient_sk NOT IN
-      (SELECT patient_sk FROM silver.patient_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+      (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
    OR service_code NOT IN
-      (SELECT service_code FROM silver.service_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
+      (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
-INSERT INTO silver.quality_event_versions
+INSERT INTO silver.fact_quality_events
 WITH latest AS
 (
     SELECT
@@ -320,11 +320,11 @@ WHERE discharge_ts IS NOT NULL
   AND discharge_ts >= admission_ts
   AND admission_mode IN ('urgence', 'programme', 'mutation')
   AND patient_sk IN
-      (SELECT patient_sk FROM silver.patient_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+      (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
   AND service_code IN
-      (SELECT service_code FROM silver.service_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
+      (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
-INSERT INTO silver.stay_diagnosis_versions
+INSERT INTO silver.fact_stay_diagnoses
 WITH prepared AS
 (
     SELECT
@@ -354,11 +354,11 @@ FROM prepared
 WHERE row_num = 1
   AND diagnosis_type IN ('principal', 'associe')
   AND stay_sk IN
-      (SELECT stay_sk FROM silver.stay_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+      (SELECT stay_sk FROM silver.fact_stays FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
   AND code_cim10 IN
-      (SELECT code_cim10 FROM silver.cim10_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
+      (SELECT code_cim10 FROM silver.dim_cim10 FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
-INSERT INTO silver.quality_event_versions
+INSERT INTO silver.fact_quality_events
 WITH prepared AS
 (
     SELECT
@@ -382,14 +382,14 @@ SELECT
     multiIf(
         diagnosis_type NOT IN ('principal', 'associe'), 'INVALID_DIAGNOSIS_TYPE',
         stay_sk NOT IN
-            (SELECT stay_sk FROM silver.stay_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'UNKNOWN_STAY',
+            (SELECT stay_sk FROM silver.fact_stays FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'UNKNOWN_STAY',
         'UNKNOWN_CIM10'
     ),
     'ERROR',
     multiIf(
         diagnosis_type NOT IN ('principal', 'associe'), 'Type de diagnostic inconnu',
         stay_sk NOT IN
-            (SELECT stay_sk FROM silver.stay_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'Séjour absent de Silver',
+            (SELECT stay_sk FROM silver.fact_stays FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'Séjour absent de Silver',
         'Code CIM-10 absent du référentiel Silver'
     ),
     source_day,
@@ -402,12 +402,12 @@ WHERE row_num = 1
   (
       diagnosis_type NOT IN ('principal', 'associe')
       OR stay_sk NOT IN
-          (SELECT stay_sk FROM silver.stay_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+          (SELECT stay_sk FROM silver.fact_stays FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
       OR code_cim10 NOT IN
-          (SELECT code_cim10 FROM silver.cim10_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+          (SELECT code_cim10 FROM silver.dim_cim10 FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
   );
 
-INSERT INTO silver.monitoring_versions
+INSERT INTO silver.fact_monitoring
 WITH prepared AS
 (
     SELECT
@@ -444,9 +444,9 @@ WHERE row_num = 1
   AND isFinite(temp_c)
   AND temp_c BETWEEN 30 AND 45
   AND stay_sk IN
-      (SELECT stay_sk FROM silver.stay_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
+      (SELECT stay_sk FROM silver.fact_stays FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
-INSERT INTO silver.quality_event_versions
+INSERT INTO silver.fact_quality_events
 WITH prepared AS
 (
     SELECT
@@ -495,5 +495,5 @@ WHERE row_num = 1
       OR NOT isFinite(temp_c)
       OR temp_c NOT BETWEEN 30 AND 45
       OR stay_sk NOT IN
-          (SELECT stay_sk FROM silver.stay_versions FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+          (SELECT stay_sk FROM silver.fact_stays FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
   );

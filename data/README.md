@@ -180,17 +180,21 @@ uniquement l'empreinte des lots Bronze au statut `SUCCESS`, crée un identifiant
 d'exécution déterministe, puis envoie à ClickHouse les requêtes `INSERT ... SELECT` de
 `clickhouse/transform/31_silver_transform.sql`.
 
-### Objets Silver publiés
+### Tables Silver
 
-| Vue Silver | Grain | Traitements principaux |
+| Table Silver | Grain | Traitements principaux |
 |---|---|---|
-| `silver.patients` | un patient | dernier snapshot, sexe normalisé, année de naissance et région contrôlées |
-| `silver.services` | un service | dernier libellé non vide par code |
-| `silver.cim10` | un code CIM-10 | dernier libellé non vide par code normalisé |
-| `silver.stays` | un séjour | dates converties, modes normalisés, références contrôlées, durée calculée |
-| `silver.stay_diagnoses` | un diagnostic par séjour, code et type | déduplication et contrôle du séjour, du type et du code CIM-10 |
-| `silver.monitoring` | un relevé par séjour et horodatage | déduplication, contrôle du séjour et des plages techniques |
-| `silver.quality_events` | une anomalie par ligne et règle | motif, sévérité et lignage de chaque rejet ou avertissement |
+| `silver.dim_patients` | un patient par exécution | dernier snapshot, sexe normalisé, année de naissance et région contrôlées |
+| `silver.dim_services` | un service par exécution | dernier libellé non vide par code |
+| `silver.dim_cim10` | un code CIM-10 par exécution | dernier libellé non vide par code normalisé |
+| `silver.fact_stays` | un séjour par exécution | dates converties, modes normalisés, références contrôlées, durée calculée |
+| `silver.fact_stay_diagnoses` | un diagnostic par séjour, code, type et exécution | déduplication et contrôle du séjour, du type et du code CIM-10 |
+| `silver.fact_monitoring` | un relevé par séjour, horodatage et exécution | déduplication, contrôle du séjour et des plages techniques |
+| `silver.fact_quality_events` | une anomalie par ligne, règle et exécution | motif, sévérité et lignage de chaque rejet ou avertissement |
+
+La nomenclature `dim_`/`fact_` matérialise directement le modèle analytique retenu. Il
+n'existe pas de table intermédiaire suffixée par `_versions`. Le `run_id` est une colonne
+de chacune des tables classiques et fait partie de leur clé de tri ClickHouse.
 
 Les valeurs conservées dans Silver respectent notamment les règles suivantes :
 
@@ -207,20 +211,23 @@ encore les seuils d'alerte clinique, qui seront calculés dans Gold. Un mode de 
 absent sur un séjour terminé produit un événement `WARNING`, mais le séjour reste
 utilisable.
 
-### Publication atomique et rejeu
+### Traçabilité et rejeu
 
-Les tables physiques suffixées par `_versions` contiennent le résultat associé à un
-`run_id`. Les vues `silver.*` n'exposent que la dernière exécution enregistrée au statut
-`SUCCESS` dans `control.silver_runs`.
+`control.silver_runs` conserve le statut de chaque transformation. Les consommateurs de
+Silver et les futurs calculs Gold doivent sélectionner le `run_id` de la dernière
+exécution réussie :
 
-```text
-RUNNING -> écritures dans les tables de versions -> contrôles -> SUCCESS -> publication
+```sql
+WHERE run_id = (
+    SELECT run_id
+    FROM control.v_latest_successful_silver_run
+)
 ```
 
-Si une requête échoue, le statut devient `FAILED` et les vues continuent d'exposer la
-dernière version réussie. L'identifiant dépend de l'empreinte Bronze et de la version
-`silver-v1` : un rejeu strictement identique est ignoré. Lorsqu'une règle SQL change, la
-version de transformation doit être incrémentée pour autoriser une nouvelle publication.
+Cette condition empêche une exécution `RUNNING` ou `FAILED` d'être utilisée. L'identifiant
+dépend de l'empreinte Bronze et de la version `silver-v2` : un rejeu strictement identique
+est ignoré. Lorsqu'une règle SQL change, la version de transformation doit être
+incrémentée pour autoriser une nouvelle exécution.
 
 ### Exécution
 
@@ -234,23 +241,36 @@ docker compose run --rm --build silver-transformer
 Une seconde exécution sans nouveau lot Bronze doit afficher :
 
 ```text
-SKIPPED version=silver-v1
+SKIPPED version=silver-v2
 ```
 
 Pour contrôler les volumes publiés :
 
 ```sql
-SELECT 'patients' AS objet, count() FROM silver.patients
-UNION ALL SELECT 'stays', count() FROM silver.stays
-UNION ALL SELECT 'stay_diagnoses', count() FROM silver.stay_diagnoses
-UNION ALL SELECT 'monitoring', count() FROM silver.monitoring;
+WITH (
+    SELECT run_id FROM control.v_latest_successful_silver_run
+) AS current_run
+SELECT 'dim_patients' AS objet, count()
+FROM silver.dim_patients FINAL WHERE run_id = current_run
+UNION ALL
+SELECT 'fact_stays', count()
+FROM silver.fact_stays FINAL WHERE run_id = current_run
+UNION ALL
+SELECT 'fact_stay_diagnoses', count()
+FROM silver.fact_stay_diagnoses FINAL WHERE run_id = current_run
+UNION ALL
+SELECT 'fact_monitoring', count()
+FROM silver.fact_monitoring FINAL WHERE run_id = current_run;
 ```
 
 Pour examiner les anomalies :
 
 ```sql
 SELECT severity, rule_code, count() AS events
-FROM silver.quality_events
+FROM silver.fact_quality_events FINAL
+WHERE run_id = (
+    SELECT run_id FROM control.v_latest_successful_silver_run
+)
 GROUP BY severity, rule_code
 ORDER BY severity, events DESC;
 ```
@@ -270,13 +290,14 @@ Validation réalisée sur les lots Bronze fournis :
 Les 4 329 événements qualité se répartissent ainsi : 1 369 fréquences cardiaques hors
 plage, 849 références vers un séjour rejeté, 136 sorties antérieures à l'admission et
 1 975 modes de sortie manquants. Les contrôles finaux ne trouvent plus aucune date de
-séjour incohérente, valeur de monitoring hors plage ou diagnostic orphelin dans les vues
-Silver.
+séjour incohérente, valeur de monitoring hors plage ou diagnostic orphelin dans les tables
+Silver du dernier `run_id` réussi.
 
 ### Limites de cette étape
 
 - les horodatages sans fuseau explicite sont interprétés en UTC ;
-- les tables de versions conservent les publications précédentes pour la traçabilité ;
+- les tables Silver conservent les exécutions successives grâce à leur colonne `run_id` ;
+- toute requête Silver doit filtrer le dernier `run_id` au statut `SUCCESS` ;
 - les règles de calcul des alertes et des indicateurs métier appartiennent à Gold ;
 - l'orchestration est rejouable et journalisée, mais sa planification périodique sera
   ajoutée dans une étape dédiée.
