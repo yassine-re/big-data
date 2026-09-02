@@ -226,7 +226,7 @@ séjour reste utilisable.
 ### Traçabilité et rejeu
 
 `control.silver_runs` conserve le statut de chaque transformation. Les consommateurs de
-Silver et les futurs calculs Gold doivent sélectionner le `run_id` de la dernière
+Silver et les calculs Gold doivent sélectionner le `run_id` de la dernière
 exécution réussie :
 
 ```sql
@@ -324,9 +324,117 @@ même relevé peut apparaître dans plusieurs catégories.
 - toute requête Silver doit filtrer le dernier `run_id` au statut `SUCCESS` ;
 - les seuils `monitoring-alert-v1` sont des règles projet à faire valider par le métier
   avant un usage réel ;
-- Gold calculera les taux et agrégations à partir des indicateurs individuels Silver ;
+- Gold calcule les taux et agrégations à partir des indicateurs individuels Silver ;
 - l'orchestration est rejouable et journalisée, mais sa planification périodique sera
   ajoutée dans une étape dédiée.
+
+## Étape 5 - transformation Silver vers Gold
+
+Le service `gold-transformer` sélectionne exclusivement le dernier `run_id` Silver au
+statut `SUCCESS`. Python crée le `run_id` Gold, envoie les quatre requêtes
+`INSERT ... SELECT` à ClickHouse et journalise le résultat dans `control.gold_runs`.
+Aucune ligne métier ne sort de ClickHouse.
+
+### Tables et grains Gold
+
+| Table Gold | Grain | Usage |
+|---|---|---|
+| `gold.fact_service_daily_activity` | un jour d'admission et un service | activité, urgences, DMS et réadmissions |
+| `gold.fact_monitoring_alerts_daily` | un jour de relevé, un service et une version de règle | volumes et motifs d'alerte |
+| `gold.fact_pathology_prevalence` | un code CIM-10 | taille et part de la cohorte |
+| `gold.fact_cohort_distribution` | un code CIM-10, une tranche d'âge et un sexe | description de cohorte |
+
+Les libellés de service et de diagnostic sont recopiés dans Gold pour rendre les tables
+directement exploitables par Metabase. Chaque ligne conserve le `run_id` Gold et le
+`silver_run_id` dont elle provient.
+
+### Formules retenues
+
+- `admission_count` est la somme du compteur unitaire des séjours admis le jour concerné ;
+- `emergency_admission_count` compte les admissions dont le mode vaut `urgence` ;
+- la DMS est calculée uniquement sur les séjours terminés : somme des durées en minutes
+  divisée par le nombre de séjours terminés, puis par 1 440 ;
+- le taux de réadmission est la part des admissions dont `is_readmission_30d` vaut 1 ;
+- le taux d'alerte est le nombre de relevés ayant au moins une alerte divisé par le
+  nombre de relevés contrôlés ;
+- la taille d'une cohorte est le nombre de patients distincts associés à un code CIM-10 ;
+- les tranches d'âge sont `00-17`, `18-39`, `40-64`, `65-79` et `80+`.
+
+Le taux de réadmission mesure donc ici la part des nouvelles admissions identifiées
+comme un retour sous 30 jours. Ce choix correspond à l'indicateur individuel calculé en
+Silver ; il devra être redéfini si le métier souhaite rattacher le retour au service du
+séjour précédent ou exclure certaines sorties.
+
+### Confidentialité des cohortes
+
+Le seuil minimal est fixé à cinq patients distincts. Lorsqu'une pathologie ou un segment
+âge-sexe contient moins de cinq patients, `is_suppressed` vaut 1 et toutes les mesures de
+la ligne valent `NULL`. Le masquage est réalisé dans ClickHouse et ne dépend donc pas de
+la configuration d'une visualisation Metabase.
+
+### Traçabilité, exécution et rejeu
+
+`control.v_latest_successful_gold_run` publie uniquement la dernière exécution Gold
+réussie. L'identifiant dépend de la version `gold-v2` et du `silver_run_id` consommé : un
+rejeu avec le même Silver est ignoré.
+
+Après la transformation Silver :
+
+```bash
+docker compose run --rm --build gold-transformer
+```
+
+Une seconde exécution doit afficher :
+
+```text
+SKIPPED version=gold-v2
+```
+
+Pour consulter les volumes de la publication courante :
+
+```sql
+WITH (
+    SELECT run_id FROM control.v_latest_successful_gold_run
+) AS current_run
+SELECT 'activité' AS objet, count()
+FROM gold.fact_service_daily_activity FINAL WHERE run_id = current_run
+UNION ALL
+SELECT 'monitoring', count()
+FROM gold.fact_monitoring_alerts_daily FINAL WHERE run_id = current_run
+UNION ALL
+SELECT 'prévalence', count()
+FROM gold.fact_pathology_prevalence FINAL WHERE run_id = current_run
+UNION ALL
+SELECT 'cohortes', count()
+FROM gold.fact_cohort_distribution FINAL WHERE run_id = current_run;
+```
+
+Validation réalisée sur la dernière publication Silver :
+
+| Objet Gold | Lignes |
+|---|---:|
+| Activité quotidienne par service | 223 |
+| Alertes quotidiennes par service | 59 |
+| Prévalence par pathologie | 13 |
+| Distribution des cohortes | 82 |
+| **Total Gold** | **377** |
+
+Les agrégats retrouvent les 6 729 admissions Silver, dont 3 327 urgences, 6 046 séjours
+terminés et 780 réadmissions. La DMS globale pondérée est de 5,15 jours. Les 40 400
+relevés produisent 3 270 alertes, soit 8,09 %. Les 12 593 diagnostics sont pris en compte
+avant masquage. Deux pathologies et dix segments âge-sexe inférieurs au seuil sont
+publiés sans leurs mesures. Aucun doublon n'est présent aux quatre grains Gold.
+
+### Limites de cette étape
+
+- la DMS exclut les séjours en cours ;
+- le taux de réadmission est attribué au service de la nouvelle admission ;
+- la prévalence représente la part des patients diagnostiqués, et non celle de toute la
+  population hospitalière ou régionale ;
+- le masquage simple des petits groupes devra être complété par une stratégie de
+  suppression secondaire avant un usage réel ou une diffusion externe ;
+- les tables Gold doivent être lues avec le `run_id` de
+  `control.v_latest_successful_gold_run` et avec `FINAL`.
 
 Pour arrêter ClickHouse sans supprimer ses volumes :
 

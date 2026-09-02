@@ -54,7 +54,7 @@ Choix retenus :
 - le filestorage est monté en lecture seule afin de ne jamais modifier les dépôts du CHU ;
 - Python copie les fichiers, applique la pseudonymisation obligatoire et pilotera les
   chargements et les requêtes ;
-- ClickHouse exécutera les transformations Bronze vers Silver puis Gold en SQL ;
+- ClickHouse exécute les transformations Bronze vers Silver puis Gold en SQL ;
 - aucune transformation métier ne sera réalisée en mémoire avec pandas ;
 - Metabase fournira les interfaces d'analyse sans développement d'une application web.
 
@@ -140,17 +140,17 @@ Les plages 20–250 pour la fréquence cardiaque, 50–100 pour la SpO2 et 30–
 température servent à éliminer les valeurs techniquement impossibles. Sur les relevés
 restants, la règle `monitoring-alert-v1` signale une SpO2 inférieure à 92 %, une fréquence
 cardiaque inférieure à 50 ou supérieure à 100 bpm, et une température supérieure à
-38,5 °C. `is_alert` vaut 1 dès qu'au moins l'une de ces conditions est satisfaite. Les
-agrégations quotidiennes seront construites dans Gold.
+38,5 °C. `is_alert` vaut 1 dès qu'au moins l'une de ces conditions est satisfaite. Gold
+construit les agrégations quotidiennes à partir de ces indicateurs.
 
 `fact_stay_diagnoses` contient le `patient_sk` récupéré depuis le séjour. Un diagnostic
 peut ainsi être relié directement à `dim_patients` pour constituer une cohorte. L'âge
 individuel est stocké au même grain dans `age_at_diagnosis_approx` et calculé avec la
 formule `année d'admission du séjour - année de naissance`. La suppression de la date de
-naissance complète entraîne une précision à un an près. Les tranches d'âge et les
-distributions agrégées seront construites dans Gold.
+naissance complète entraîne une précision à un an près. Gold utilise cette valeur pour
+construire les tranches d'âge et les distributions agrégées.
 
-Les traitements Gold sélectionneront uniquement le `run_id` retourné par
+Les traitements Gold sélectionnent uniquement le `run_id` retourné par
 `control.v_latest_successful_silver_run`. Une exécution en cours ou en échec n'est donc
 pas utilisée. Le rejeu d'une même version avec les mêmes lots Bronze est ignoré.
 
@@ -164,33 +164,46 @@ Les enrichissements Silver identifient 780 réadmissions à 30 jours et 3 270 re
 alerte. Les compteurs unitaires des séjours, diagnostics et relevés permettront de
 construire les sommes et taux Gold sans recompter les grains.
 
-### 4.4 Traitements à venir
+### 4.4 Transformation Gold actuellement implémentée
 
-- calcul des indicateurs dans Gold ;
-- planification périodique de la collecte et des transformations ;
-- journalisation globale du pipeline et procédure de reprise sur incident.
+Gold agrège le dernier `run_id` Silver réussi dans quatre tables directement
+interrogeables par Metabase : activité quotidienne par service, alertes quotidiennes,
+prévalence par pathologie et distribution des cohortes par tranche d'âge et sexe. Les
+calculs sont des `INSERT ... SELECT` exécutés dans ClickHouse ; Python se limite au
+pilotage et à la journalisation dans `control.gold_runs`.
+
+Chaque ligne conserve le `run_id` Gold et le `silver_run_id` source. Un rejeu avec la
+même version et le même Silver est ignoré. Les groupes cliniques de moins de cinq
+patients sont signalés par `is_suppressed` et leurs mesures sont remplacées par `NULL`
+avant toute exposition à l'outil de visualisation.
 
 ## 5. Indicateurs attendus
 
-Les indicateurs viennent du besoin métier. Ils seront documentés avec leur requête et
-leur résultat uniquement après la construction de Gold.
+Les indicateurs viennent du besoin métier et sont maintenant calculés dans Gold.
 
 ### Pilotage hospitalier
 
-- durée moyenne de séjour par service ;
-- activité des urgences par jour ;
-- taux de réadmission à 30 jours ;
-- relevés de constantes en alerte par jour.
+- durée moyenne de séjour : somme des durées des séjours terminés divisée par leur
+  nombre, présentée en jours et par service ;
+- activité des urgences : admissions en mode `urgence` par jour et par service ;
+- taux de réadmission à 30 jours : part des admissions portant l'indicateur Silver ;
+- relevés en alerte : volumes et taux quotidiens, avec le détail fréquence cardiaque,
+  SpO2 et température.
 
 ### Recherche clinique
 
-- taille des cohortes par diagnostic ;
-- distribution d'une cohorte par âge et sexe ;
-- masquage des groupes de moins de cinq patients.
+- taille des cohortes : patients distincts par code CIM-10 ;
+- distribution d'une cohorte selon cinq tranches d'âge et le sexe ;
+- masquage dans ClickHouse des groupes de moins de cinq patients.
+
+La publication validée contient 377 lignes Gold. Elle retrouve 6 729 admissions, dont
+3 327 urgences, 780 réadmissions et une DMS globale pondérée de 5,15 jours. Les 40 400
+relevés produisent 3 270 alertes, soit 8,09 %. Deux pathologies et dix segments âge-sexe
+sont masqués par le seuil de confidentialité. Les quatre grains Gold sont sans doublon.
 
 ## 6. Visualisations attendues
 
-Deux dashboards Metabase seront construits après validation des vues Gold :
+Les tables Gold sont prêtes pour la construction de deux dashboards Metabase :
 
 - un dashboard Pilotage hospitalier ;
 - un dashboard Recherche clinique.
@@ -205,8 +218,13 @@ visualisation n'est annoncée comme terminée à cette étape.
 - les horodatages sans fuseau explicite sont actuellement interprétés en UTC ;
 - l'âge associé au diagnostic est approximatif à un an près ;
 - les requêtes sur Silver doivent sélectionner le dernier `run_id` réussi ;
-- aucune donnée n'est encore disponible dans Gold ;
+- les requêtes Gold doivent sélectionner le dernier `run_id` réussi et utiliser
+  `FINAL` ;
 - les seuils d'alerte `monitoring-alert-v1` devront être validés par le métier avant un
   usage réel ;
+- la DMS exclut les séjours en cours et la réadmission est attribuée au service de la
+  nouvelle admission ;
+- une suppression secondaire devra compléter le masquage simple des petites cohortes
+  avant toute diffusion externe ;
 - les règles et chiffres finaux devront rester justifiables par leur fichier source et
   leur date de traitement.
