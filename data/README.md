@@ -187,9 +187,9 @@ d'exécution déterministe, puis envoie à ClickHouse les requêtes `INSERT ... 
 | `silver.dim_patients` | un patient par exécution | dernier snapshot, sexe normalisé, année de naissance et région contrôlées |
 | `silver.dim_services` | un service par exécution | dernier libellé non vide par code |
 | `silver.dim_cim10` | un code CIM-10 par exécution | dernier libellé non vide par code normalisé |
-| `silver.fact_stays` | un séjour par exécution | dates converties, modes normalisés, références contrôlées, durée et âge approximatif calculés |
-| `silver.fact_stay_diagnoses` | un diagnostic par séjour, code, type et exécution | ajout du patient, déduplication et contrôle du séjour, du type et du code CIM-10 |
-| `silver.fact_monitoring` | un relevé par séjour, horodatage et exécution | déduplication, contrôle du séjour et des plages techniques |
+| `silver.fact_stays` | un séjour par exécution | dates et modes normalisés, durée, âge, compteur et réadmission à 30 jours calculés |
+| `silver.fact_stay_diagnoses` | un diagnostic par séjour, code, type et exécution | ajout du patient, déduplication, contrôles et compteur unitaire |
+| `silver.fact_monitoring` | un relevé par séjour, horodatage et exécution | contrôles, compteur et indicateurs d'alerte versionnés |
 | `silver.fact_quality_events` | une anomalie par ligne, règle et exécution | motif, sévérité et lignage de chaque rejet ou avertissement |
 
 La nomenclature `dim_`/`fact_` matérialise directement le modèle analytique retenu. Il
@@ -201,6 +201,8 @@ Les valeurs conservées dans Silver respectent notamment les règles suivantes :
 - une sortie ne peut pas précéder l'admission ;
 - `age_at_admission_approx` est calculé par `année d'admission - année de naissance` et
   doit être compris entre 0 et 120 ans ;
+- `is_readmission_30d` vaut 1 lorsque l'admission survient entre 0 et 30 jours après la
+  sortie du séjour précédent du même patient, les séjours étant ordonnés par admission ;
 - les modes d'admission acceptés sont `urgence`, `programme` et `mutation` ;
 - les types de diagnostic acceptés sont `principal` et `associe` ;
 - un diagnostic doit référencer un séjour Silver et un code du référentiel CIM-10 ;
@@ -209,10 +211,17 @@ Les valeurs conservées dans Silver respectent notamment les règles suivantes :
   et 30–45 °C pour la température.
 
 Ces plages éliminent les valeurs techniquement impossibles. Elles ne constituent pas
-encore les seuils d'alerte clinique, qui seront calculés dans Gold. Le `patient_sk` est
-propagé dans `fact_stay_diagnoses` afin de joindre directement un diagnostic à
-`dim_patients`. Un mode de sortie absent sur un séjour terminé produit un événement
-`WARNING`, mais le séjour reste utilisable.
+les seuils d'alerte. Après ce contrôle, `monitoring-alert-v1` applique les règles métier
+suivantes : SpO2 strictement inférieure à 92 %, fréquence cardiaque strictement inférieure
+à 50 ou supérieure à 100 bpm, température strictement supérieure à 38,5 °C. Les colonnes
+`heart_rate_alert`, `spo2_alert` et `temp_alert` identifient chaque motif ; `is_alert`
+vaut 1 si au moins l'un d'eux est présent.
+
+Les colonnes `stay_count`, `diagnosis_count` et `reading_count` valent 1 au grain de leur
+table et pourront être additionnées dans Gold. Le `patient_sk` est propagé dans
+`fact_stay_diagnoses` afin de joindre directement un diagnostic à `dim_patients`. Un
+mode de sortie absent sur un séjour terminé produit un événement `WARNING`, mais le
+séjour reste utilisable.
 
 ### Traçabilité et rejeu
 
@@ -228,7 +237,7 @@ WHERE run_id = (
 ```
 
 Cette condition empêche une exécution `RUNNING` ou `FAILED` d'être utilisée. L'identifiant
-dépend de l'empreinte Bronze et de la version `silver-v3` : un rejeu strictement identique
+dépend de l'empreinte Bronze et de la version `silver-v4` : un rejeu strictement identique
 est ignoré. Lorsqu'une règle SQL change, la version de transformation doit être
 incrémentée pour autoriser une nouvelle exécution.
 
@@ -244,7 +253,7 @@ docker compose run --rm --build silver-transformer
 Une seconde exécution sans nouveau lot Bronze doit afficher :
 
 ```text
-SKIPPED version=silver-v3
+SKIPPED version=silver-v4
 ```
 
 Pour contrôler les volumes publiés :
@@ -300,6 +309,11 @@ Le contrôle de l'enrichissement confirme que les âges à l'admission sont comp
 6 et 96 ans, qu'ils correspondent tous au calcul documenté et que chaque diagnostic
 porte le même `patient_sk` que son séjour.
 
+La dernière exécution identifie 748 réadmissions à 30 jours. Sur les 64 799 relevés
+Silver, 1 785 déclenchent l'alerte de fréquence cardiaque, 1 672 l'alerte SpO2 et 1 735
+l'alerte de température. Au total, 5 192 relevés présentent au moins une alerte ; un
+même relevé peut apparaître dans plusieurs catégories.
+
 ### Limites de cette étape
 
 - les horodatages sans fuseau explicite sont interprétés en UTC ;
@@ -307,7 +321,9 @@ porte le même `patient_sk` que son séjour.
   conservée après pseudonymisation ;
 - les tables Silver conservent les exécutions successives grâce à leur colonne `run_id` ;
 - toute requête Silver doit filtrer le dernier `run_id` au statut `SUCCESS` ;
-- les règles de calcul des alertes et des indicateurs métier appartiennent à Gold ;
+- les seuils `monitoring-alert-v1` sont des règles projet à faire valider par le métier
+  avant un usage réel ;
+- Gold calculera les taux et agrégations à partir des indicateurs individuels Silver ;
 - l'orchestration est rejouable et journalisée, mais sa planification périodique sera
   ajoutée dans une étape dédiée.
 

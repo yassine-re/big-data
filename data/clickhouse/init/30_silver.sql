@@ -50,8 +50,10 @@ CREATE TABLE IF NOT EXISTS silver.fact_stays
     age_at_admission_approx UInt8,
     admission_mode LowCardinality(String),
     discharge_mode Nullable(String),
+    stay_count UInt8,
     is_ongoing UInt8,
     length_of_stay_minutes Nullable(UInt32),
+    is_readmission_30d UInt8,
     source_day Date,
     source_file String,
     source_batch_id UUID,
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS silver.fact_stay_diagnoses
     patient_sk FixedString(64),
     code_cim10 String,
     diagnosis_type LowCardinality(String),
+    diagnosis_count UInt8,
     source_day Date,
     source_file String,
     source_batch_id UUID,
@@ -83,6 +86,12 @@ CREATE TABLE IF NOT EXISTS silver.fact_monitoring
     heart_rate UInt16,
     spo2 UInt8,
     temp_c Decimal32(2),
+    reading_count UInt8,
+    heart_rate_alert UInt8,
+    spo2_alert UInt8,
+    temp_alert UInt8,
+    is_alert UInt8,
+    alert_rule_version LowCardinality(String),
     source_day Date,
     source_file String,
     source_batch_id UUID,
@@ -113,3 +122,31 @@ ALTER TABLE silver.fact_stays
 
 ALTER TABLE silver.fact_stay_diagnoses
     ADD COLUMN IF NOT EXISTS patient_sk FixedString(64) AFTER stay_sk;
+
+ALTER TABLE silver.fact_stays
+    ADD COLUMN IF NOT EXISTS stay_count UInt8 DEFAULT 1 AFTER discharge_mode;
+
+ALTER TABLE silver.fact_stays
+    ADD COLUMN IF NOT EXISTS is_readmission_30d UInt8 DEFAULT 0 AFTER length_of_stay_minutes;
+
+ALTER TABLE silver.fact_stay_diagnoses
+    ADD COLUMN IF NOT EXISTS diagnosis_count UInt8 DEFAULT 1 AFTER diagnosis_type;
+
+ALTER TABLE silver.fact_monitoring
+    ADD COLUMN IF NOT EXISTS reading_count UInt8 DEFAULT 1 AFTER temp_c;
+
+ALTER TABLE silver.fact_monitoring
+    ADD COLUMN IF NOT EXISTS heart_rate_alert UInt8 DEFAULT 0 AFTER reading_count;
+
+ALTER TABLE silver.fact_monitoring
+    ADD COLUMN IF NOT EXISTS spo2_alert UInt8 DEFAULT 0 AFTER heart_rate_alert;
+
+ALTER TABLE silver.fact_monitoring
+    ADD COLUMN IF NOT EXISTS temp_alert UInt8 DEFAULT 0 AFTER spo2_alert;
+
+ALTER TABLE silver.fact_monitoring
+    ADD COLUMN IF NOT EXISTS is_alert UInt8 DEFAULT 0 AFTER temp_alert;
+
+ALTER TABLE silver.fact_monitoring
+    ADD COLUMN IF NOT EXISTS alert_rule_version LowCardinality(String)
+    DEFAULT 'monitoring-alert-v1' AFTER is_alert;

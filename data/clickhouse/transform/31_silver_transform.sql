@@ -169,42 +169,78 @@ prepared AS
         empty(trim(discharge_ts_raw)) AS discharge_is_empty
     FROM latest
     WHERE row_num = 1
+),
+valid_stays AS
+(
+    SELECT
+        stay.stay_sk,
+        stay.patient_sk,
+        stay.service_code,
+        stay.admission_ts,
+        stay.discharge_ts,
+        toUInt8(toYear(stay.admission_ts) - patient.birth_year) AS age_at_admission_approx,
+        stay.admission_mode,
+        CAST(nullIf(stay.discharge_mode, ''), 'Nullable(String)') AS discharge_mode,
+        toUInt8(stay.discharge_ts IS NULL) AS is_ongoing,
+        if(
+            stay.discharge_ts IS NULL,
+            CAST(NULL, 'Nullable(UInt32)'),
+            toUInt32(dateDiff('minute', stay.admission_ts, stay.discharge_ts))
+        ) AS length_of_stay_minutes,
+        stay.source_day,
+        stay.source_file,
+        stay.batch_id
+    FROM prepared AS stay
+    INNER JOIN
+    (
+        SELECT patient_sk, birth_year
+        FROM silver.dim_patients FINAL
+        WHERE run_id = toUUID('{{RUN_ID}}')
+    ) AS patient ON stay.patient_sk = patient.patient_sk
+    WHERE stay.admission_ts IS NOT NULL
+      AND (stay.discharge_is_empty OR stay.discharge_ts IS NOT NULL)
+      AND (stay.discharge_ts IS NULL OR stay.discharge_ts >= stay.admission_ts)
+      AND stay.admission_mode IN ('urgence', 'programme', 'mutation')
+      AND (empty(stay.discharge_mode) OR stay.discharge_mode IN ('domicile', 'mutation', 'transfert', 'deces'))
+      AND toYear(stay.admission_ts) BETWEEN patient.birth_year AND patient.birth_year + 120
+      AND stay.service_code IN
+          (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
+),
+ordered_stays AS
+(
+    SELECT
+        *,
+        lagInFrame(discharge_ts) OVER
+        (
+            PARTITION BY patient_sk
+            ORDER BY admission_ts, stay_sk
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS previous_discharge_ts
+    FROM valid_stays
 )
 SELECT
     toUUID('{{RUN_ID}}'),
-    stay.stay_sk,
-    stay.patient_sk,
-    stay.service_code,
-    stay.admission_ts,
-    stay.discharge_ts,
-    toUInt8(toYear(stay.admission_ts) - patient.birth_year),
-    stay.admission_mode,
-    CAST(nullIf(stay.discharge_mode, ''), 'Nullable(String)'),
-    toUInt8(stay.discharge_ts IS NULL),
+    stay_sk,
+    patient_sk,
+    service_code,
+    admission_ts,
+    discharge_ts,
+    age_at_admission_approx,
+    admission_mode,
+    discharge_mode,
+    toUInt8(1),
+    is_ongoing,
+    length_of_stay_minutes,
     if(
-        stay.discharge_ts IS NULL,
-        CAST(NULL, 'Nullable(UInt32)'),
-        toUInt32(dateDiff('minute', stay.admission_ts, stay.discharge_ts))
+        previous_discharge_ts IS NULL,
+        toUInt8(0),
+        toUInt8(dateDiff('day', previous_discharge_ts, admission_ts) BETWEEN 0 AND 30)
     ),
-    stay.source_day,
-    stay.source_file,
-    stay.batch_id,
+    source_day,
+    source_file,
+    batch_id,
     now64(6, 'UTC')
-FROM prepared AS stay
-INNER JOIN
-(
-    SELECT patient_sk, birth_year
-    FROM silver.dim_patients FINAL
-    WHERE run_id = toUUID('{{RUN_ID}}')
-) AS patient ON stay.patient_sk = patient.patient_sk
-WHERE stay.admission_ts IS NOT NULL
-  AND (stay.discharge_is_empty OR stay.discharge_ts IS NOT NULL)
-  AND (stay.discharge_ts IS NULL OR stay.discharge_ts >= stay.admission_ts)
-  AND stay.admission_mode IN ('urgence', 'programme', 'mutation')
-  AND (empty(stay.discharge_mode) OR stay.discharge_mode IN ('domicile', 'mutation', 'transfert', 'deces'))
-  AND toYear(stay.admission_ts) BETWEEN patient.birth_year AND patient.birth_year + 120
-  AND stay.service_code IN
-      (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
+FROM ordered_stays;
 
 INSERT INTO silver.fact_quality_events
 WITH latest AS
@@ -368,6 +404,7 @@ SELECT
     stay.patient_sk,
     diagnosis.code_cim10,
     diagnosis.diagnosis_type,
+    toUInt8(1),
     diagnosis.source_day,
     diagnosis.source_file,
     diagnosis.batch_id,
@@ -433,6 +470,8 @@ WHERE row_num = 1
           (SELECT code_cim10 FROM silver.dim_cim10 FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
   );
 
+-- Règles métier monitoring-alert-v1 :
+-- SpO2 < 92 %, fréquence cardiaque < 50 ou > 100 bpm, température > 38,5 °C.
 INSERT INTO silver.fact_monitoring
 WITH prepared AS
 (
@@ -459,6 +498,12 @@ SELECT
     toUInt16(heart_rate),
     toUInt8(spo2),
     toDecimal32(temp_c, 2),
+    toUInt8(1),
+    toUInt8(heart_rate < 50 OR heart_rate > 100),
+    toUInt8(spo2 < 92),
+    toUInt8(temp_c > 38.5),
+    toUInt8(heart_rate < 50 OR heart_rate > 100 OR spo2 < 92 OR temp_c > 38.5),
+    'monitoring-alert-v1',
     source_day,
     source_file,
     batch_id,

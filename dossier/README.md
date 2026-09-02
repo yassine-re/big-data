@@ -129,14 +129,20 @@ Les traitements comprennent :
 - la normalisation des codes, libellés, sexes, modes et types de diagnostic ;
 - la conversion des dates de séjour, le calcul de leur durée en minutes et de l'âge
   approximatif du patient à l'admission ;
+- le calcul de l'indicateur individuel de réadmission dans les 30 jours suivant la sortie
+  du séjour précédent ;
 - la vérification des liens patient–séjour, service–séjour, séjour–diagnostic et
   séjour–monitoring ;
 - le contrôle des plages techniques du monitoring ;
+- le calcul des alertes individuelles du monitoring avec une règle versionnée ;
 - l'enregistrement des rejets et avertissements avec leur fichier, jour et lot source.
 
 Les plages 20–250 pour la fréquence cardiaque, 50–100 pour la SpO2 et 30–45 °C pour la
-température servent à éliminer les valeurs techniquement impossibles. Les seuils d'alerte
-clinique seront distincts et calculés dans Gold.
+température servent à éliminer les valeurs techniquement impossibles. Sur les relevés
+restants, la règle `monitoring-alert-v1` signale une SpO2 inférieure à 92 %, une fréquence
+cardiaque inférieure à 50 ou supérieure à 100 bpm, et une température supérieure à
+38,5 °C. `is_alert` vaut 1 dès qu'au moins l'une de ces conditions est satisfaite. Les
+agrégations quotidiennes seront construites dans Gold.
 
 `fact_stay_diagnoses` contient le `patient_sk` récupéré depuis le séjour. Un diagnostic
 peut ainsi être relié directement à `dim_patients` pour constituer une cohorte. L'âge
@@ -154,6 +160,10 @@ Sur les données fournies, Silver publie 122 721 lignes : 6 000 patients, 8 serv
 événements qualité restent consultables dans `silver.fact_quality_events`. Les tables du
 dernier `run_id` réussi ne contiennent aucune sortie antérieure à l'admission, valeur de
 monitoring hors plage technique ou diagnostic orphelin.
+
+Les enrichissements Silver identifient 748 réadmissions à 30 jours et 5 192 relevés en
+alerte. Les compteurs unitaires des séjours, diagnostics et relevés permettront de
+construire les sommes et taux Gold sans recompter les grains.
 
 ### 4.4 Traitements à venir
 
@@ -197,7 +207,7 @@ visualisation n'est annoncée comme terminée à cette étape.
 - l'âge à l'admission est approximatif à un an près ;
 - les requêtes sur Silver doivent sélectionner le dernier `run_id` réussi ;
 - aucune donnée n'est encore disponible dans Gold ;
-- les seuils d'alerte du monitoring seront appliqués plus tard en SQL selon les bornes
-  métier retenues ;
+- les seuils d'alerte `monitoring-alert-v1` devront être validés par le métier avant un
+  usage réel ;
 - les règles et chiffres finaux devront rester justifiables par leur fichier source et
   leur date de traitement.
