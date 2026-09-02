@@ -10,7 +10,7 @@ from uuid import UUID, uuid5
 
 
 RUN_NAMESPACE = UUID("15f93989-c6a1-47bd-a876-30a9fbebdd0c")
-TRANSFORMATION_VERSION = "silver-v2"
+TRANSFORMATION_VERSION = "silver-v3"
 
 
 class ClickHouseClient:

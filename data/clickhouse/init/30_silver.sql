@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS silver.fact_stays
     service_code String,
     admission_ts DateTime64(6, 'UTC'),
     discharge_ts Nullable(DateTime64(6, 'UTC')),
+    age_at_admission_approx UInt8,
     admission_mode LowCardinality(String),
     discharge_mode Nullable(String),
     is_ongoing UInt8,
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS silver.fact_stay_diagnoses
 (
     run_id UUID,
     stay_sk FixedString(64),
+    patient_sk FixedString(64),
     code_cim10 String,
     diagnosis_type LowCardinality(String),
     source_day Date,
@@ -104,3 +106,10 @@ CREATE TABLE IF NOT EXISTS silver.fact_quality_events
 )
 ENGINE = ReplacingMergeTree(detected_at)
 ORDER BY (run_id, source_table, record_key, rule_code);
+
+-- Compatibilité avec un volume ClickHouse créé avant l'ajout des enrichissements.
+ALTER TABLE silver.fact_stays
+    ADD COLUMN IF NOT EXISTS age_at_admission_approx UInt8 AFTER discharge_ts;
+
+ALTER TABLE silver.fact_stay_diagnoses
+    ADD COLUMN IF NOT EXISTS patient_sk FixedString(64) AFTER stay_sk;

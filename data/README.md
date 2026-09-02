@@ -187,8 +187,8 @@ d'exécution déterministe, puis envoie à ClickHouse les requêtes `INSERT ... 
 | `silver.dim_patients` | un patient par exécution | dernier snapshot, sexe normalisé, année de naissance et région contrôlées |
 | `silver.dim_services` | un service par exécution | dernier libellé non vide par code |
 | `silver.dim_cim10` | un code CIM-10 par exécution | dernier libellé non vide par code normalisé |
-| `silver.fact_stays` | un séjour par exécution | dates converties, modes normalisés, références contrôlées, durée calculée |
-| `silver.fact_stay_diagnoses` | un diagnostic par séjour, code, type et exécution | déduplication et contrôle du séjour, du type et du code CIM-10 |
+| `silver.fact_stays` | un séjour par exécution | dates converties, modes normalisés, références contrôlées, durée et âge approximatif calculés |
+| `silver.fact_stay_diagnoses` | un diagnostic par séjour, code, type et exécution | ajout du patient, déduplication et contrôle du séjour, du type et du code CIM-10 |
 | `silver.fact_monitoring` | un relevé par séjour, horodatage et exécution | déduplication, contrôle du séjour et des plages techniques |
 | `silver.fact_quality_events` | une anomalie par ligne, règle et exécution | motif, sévérité et lignage de chaque rejet ou avertissement |
 
@@ -199,6 +199,8 @@ de chacune des tables classiques et fait partie de leur clé de tri ClickHouse.
 Les valeurs conservées dans Silver respectent notamment les règles suivantes :
 
 - une sortie ne peut pas précéder l'admission ;
+- `age_at_admission_approx` est calculé par `année d'admission - année de naissance` et
+  doit être compris entre 0 et 120 ans ;
 - les modes d'admission acceptés sont `urgence`, `programme` et `mutation` ;
 - les types de diagnostic acceptés sont `principal` et `associe` ;
 - un diagnostic doit référencer un séjour Silver et un code du référentiel CIM-10 ;
@@ -207,9 +209,10 @@ Les valeurs conservées dans Silver respectent notamment les règles suivantes :
   et 30–45 °C pour la température.
 
 Ces plages éliminent les valeurs techniquement impossibles. Elles ne constituent pas
-encore les seuils d'alerte clinique, qui seront calculés dans Gold. Un mode de sortie
-absent sur un séjour terminé produit un événement `WARNING`, mais le séjour reste
-utilisable.
+encore les seuils d'alerte clinique, qui seront calculés dans Gold. Le `patient_sk` est
+propagé dans `fact_stay_diagnoses` afin de joindre directement un diagnostic à
+`dim_patients`. Un mode de sortie absent sur un séjour terminé produit un événement
+`WARNING`, mais le séjour reste utilisable.
 
 ### Traçabilité et rejeu
 
@@ -225,7 +228,7 @@ WHERE run_id = (
 ```
 
 Cette condition empêche une exécution `RUNNING` ou `FAILED` d'être utilisée. L'identifiant
-dépend de l'empreinte Bronze et de la version `silver-v2` : un rejeu strictement identique
+dépend de l'empreinte Bronze et de la version `silver-v3` : un rejeu strictement identique
 est ignoré. Lorsqu'une règle SQL change, la version de transformation doit être
 incrémentée pour autoriser une nouvelle exécution.
 
@@ -241,7 +244,7 @@ docker compose run --rm --build silver-transformer
 Une seconde exécution sans nouveau lot Bronze doit afficher :
 
 ```text
-SKIPPED version=silver-v2
+SKIPPED version=silver-v3
 ```
 
 Pour contrôler les volumes publiés :
@@ -293,9 +296,15 @@ plage, 849 références vers un séjour rejeté, 136 sorties antérieures à l'a
 séjour incohérente, valeur de monitoring hors plage ou diagnostic orphelin dans les tables
 Silver du dernier `run_id` réussi.
 
+Le contrôle de l'enrichissement confirme que les âges à l'admission sont compris entre
+6 et 96 ans, qu'ils correspondent tous au calcul documenté et que chaque diagnostic
+porte le même `patient_sk` que son séjour.
+
 ### Limites de cette étape
 
 - les horodatages sans fuseau explicite sont interprétés en UTC ;
+- l'âge à l'admission est approximatif à un an près, car seule l'année de naissance est
+  conservée après pseudonymisation ;
 - les tables Silver conservent les exécutions successives grâce à leur colonne `run_id` ;
 - toute requête Silver doit filtrer le dernier `run_id` au statut `SUCCESS` ;
 - les règles de calcul des alertes et des indicateurs métier appartiennent à Gold ;

@@ -127,7 +127,8 @@ Les traitements comprennent :
 
 - la sélection du dernier snapshot disponible et la déduplication ;
 - la normalisation des codes, libellés, sexes, modes et types de diagnostic ;
-- la conversion des dates de séjour et le calcul de leur durée en minutes ;
+- la conversion des dates de séjour, le calcul de leur durée en minutes et de l'âge
+  approximatif du patient à l'admission ;
 - la vérification des liens patient–séjour, service–séjour, séjour–diagnostic et
   séjour–monitoring ;
 - le contrôle des plages techniques du monitoring ;
@@ -136,6 +137,13 @@ Les traitements comprennent :
 Les plages 20–250 pour la fréquence cardiaque, 50–100 pour la SpO2 et 30–45 °C pour la
 température servent à éliminer les valeurs techniquement impossibles. Les seuils d'alerte
 clinique seront distincts et calculés dans Gold.
+
+`fact_stay_diagnoses` contient le `patient_sk` récupéré depuis le séjour. Un diagnostic
+peut ainsi être relié directement à `dim_patients` pour constituer une cohorte. L'âge
+individuel est calculé dans `fact_stays` avec la formule
+`année d'admission - année de naissance`. Il est nommé `age_at_admission_approx`, car la
+suppression de la date de naissance complète entraîne une précision à un an près. Les
+tranches d'âge et les distributions agrégées seront construites dans Gold.
 
 Les traitements Gold sélectionneront uniquement le `run_id` retourné par
 `control.v_latest_successful_silver_run`. Une exécution en cours ou en échec n'est donc
@@ -186,6 +194,7 @@ visualisation n'est annoncée comme terminée à cette étape.
 - le lake réécrit un fichier existant sous le même chemin et ne conserve pas encore ses
   anciennes versions ;
 - les horodatages sans fuseau explicite sont actuellement interprétés en UTC ;
+- l'âge à l'admission est approximatif à un an près ;
 - les requêtes sur Silver doivent sélectionner le dernier `run_id` réussi ;
 - aucune donnée n'est encore disponible dans Gold ;
 - les seuils d'alerte du monitoring seront appliqués plus tard en SQL selon les bornes

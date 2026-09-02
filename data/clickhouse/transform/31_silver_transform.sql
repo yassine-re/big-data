@@ -172,32 +172,38 @@ prepared AS
 )
 SELECT
     toUUID('{{RUN_ID}}'),
-    stay_sk,
-    patient_sk,
-    service_code,
-    admission_ts,
-    discharge_ts,
-    admission_mode,
-    CAST(nullIf(discharge_mode, ''), 'Nullable(String)'),
-    toUInt8(discharge_ts IS NULL),
+    stay.stay_sk,
+    stay.patient_sk,
+    stay.service_code,
+    stay.admission_ts,
+    stay.discharge_ts,
+    toUInt8(toYear(stay.admission_ts) - patient.birth_year),
+    stay.admission_mode,
+    CAST(nullIf(stay.discharge_mode, ''), 'Nullable(String)'),
+    toUInt8(stay.discharge_ts IS NULL),
     if(
-        discharge_ts IS NULL,
+        stay.discharge_ts IS NULL,
         CAST(NULL, 'Nullable(UInt32)'),
-        toUInt32(dateDiff('minute', admission_ts, discharge_ts))
+        toUInt32(dateDiff('minute', stay.admission_ts, stay.discharge_ts))
     ),
-    source_day,
-    source_file,
-    batch_id,
+    stay.source_day,
+    stay.source_file,
+    stay.batch_id,
     now64(6, 'UTC')
-FROM prepared
-WHERE admission_ts IS NOT NULL
-  AND (discharge_is_empty OR discharge_ts IS NOT NULL)
-  AND (discharge_ts IS NULL OR discharge_ts >= admission_ts)
-  AND admission_mode IN ('urgence', 'programme', 'mutation')
-  AND (empty(discharge_mode) OR discharge_mode IN ('domicile', 'mutation', 'transfert', 'deces'))
-  AND patient_sk IN
-      (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
-  AND service_code IN
+FROM prepared AS stay
+INNER JOIN
+(
+    SELECT patient_sk, birth_year
+    FROM silver.dim_patients FINAL
+    WHERE run_id = toUUID('{{RUN_ID}}')
+) AS patient ON stay.patient_sk = patient.patient_sk
+WHERE stay.admission_ts IS NOT NULL
+  AND (stay.discharge_is_empty OR stay.discharge_ts IS NOT NULL)
+  AND (stay.discharge_ts IS NULL OR stay.discharge_ts >= stay.admission_ts)
+  AND stay.admission_mode IN ('urgence', 'programme', 'mutation')
+  AND (empty(stay.discharge_mode) OR stay.discharge_mode IN ('domicile', 'mutation', 'transfert', 'deces'))
+  AND toYear(stay.admission_ts) BETWEEN patient.birth_year AND patient.birth_year + 120
+  AND stay.service_code IN
       (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
 INSERT INTO silver.fact_quality_events
@@ -234,41 +240,51 @@ prepared AS
 SELECT
     toUUID('{{RUN_ID}}'),
     'bronze.stays',
-    toString(stay_sk),
+    toString(stay.stay_sk),
     multiIf(
-        admission_ts IS NULL, 'INVALID_ADMISSION_TS',
-        NOT discharge_is_empty AND discharge_ts IS NULL, 'INVALID_DISCHARGE_TS',
-        discharge_ts IS NOT NULL AND discharge_ts < admission_ts, 'DISCHARGE_BEFORE_ADMISSION',
-        admission_mode NOT IN ('urgence', 'programme', 'mutation'), 'INVALID_ADMISSION_MODE',
-        NOT empty(discharge_mode) AND discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'), 'INVALID_DISCHARGE_MODE',
-        patient_sk NOT IN
-            (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'UNKNOWN_PATIENT',
+        stay.admission_ts IS NULL, 'INVALID_ADMISSION_TS',
+        NOT stay.discharge_is_empty AND stay.discharge_ts IS NULL, 'INVALID_DISCHARGE_TS',
+        stay.discharge_ts IS NOT NULL AND stay.discharge_ts < stay.admission_ts, 'DISCHARGE_BEFORE_ADMISSION',
+        stay.admission_mode NOT IN ('urgence', 'programme', 'mutation'), 'INVALID_ADMISSION_MODE',
+        NOT empty(stay.discharge_mode) AND stay.discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'), 'INVALID_DISCHARGE_MODE',
+        empty(patient.patient_sk), 'UNKNOWN_PATIENT',
+        toYear(stay.admission_ts) NOT BETWEEN patient.birth_year AND patient.birth_year + 120, 'INVALID_AGE_AT_ADMISSION',
         'UNKNOWN_SERVICE'
     ),
     'ERROR',
     multiIf(
-        admission_ts IS NULL, 'Date d’admission invalide',
-        NOT discharge_is_empty AND discharge_ts IS NULL, 'Date de sortie invalide',
-        discharge_ts IS NOT NULL AND discharge_ts < admission_ts, 'Sortie antérieure à l’admission',
-        admission_mode NOT IN ('urgence', 'programme', 'mutation'), 'Mode d’admission inconnu',
-        NOT empty(discharge_mode) AND discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'), 'Mode de sortie inconnu',
-        patient_sk NOT IN
-            (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}')), 'Patient absent de Silver',
+        stay.admission_ts IS NULL, 'Date d’admission invalide',
+        NOT stay.discharge_is_empty AND stay.discharge_ts IS NULL, 'Date de sortie invalide',
+        stay.discharge_ts IS NOT NULL AND stay.discharge_ts < stay.admission_ts, 'Sortie antérieure à l’admission',
+        stay.admission_mode NOT IN ('urgence', 'programme', 'mutation'), 'Mode d’admission inconnu',
+        NOT empty(stay.discharge_mode) AND stay.discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'), 'Mode de sortie inconnu',
+        empty(patient.patient_sk), 'Patient absent de Silver',
+        toYear(stay.admission_ts) NOT BETWEEN patient.birth_year AND patient.birth_year + 120, 'Âge à l’admission incohérent',
         'Service absent de Silver'
     ),
-    source_day,
-    source_file,
-    batch_id,
+    stay.source_day,
+    stay.source_file,
+    stay.batch_id,
     now64(6, 'UTC')
-FROM prepared
-WHERE admission_ts IS NULL
-   OR (NOT discharge_is_empty AND discharge_ts IS NULL)
-   OR (discharge_ts IS NOT NULL AND discharge_ts < admission_ts)
-   OR admission_mode NOT IN ('urgence', 'programme', 'mutation')
-   OR (NOT empty(discharge_mode) AND discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'))
-   OR patient_sk NOT IN
-      (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
-   OR service_code NOT IN
+FROM prepared AS stay
+LEFT JOIN
+(
+    SELECT patient_sk, birth_year
+    FROM silver.dim_patients FINAL
+    WHERE run_id = toUUID('{{RUN_ID}}')
+) AS patient ON stay.patient_sk = patient.patient_sk
+WHERE stay.admission_ts IS NULL
+   OR (NOT stay.discharge_is_empty AND stay.discharge_ts IS NULL)
+   OR (stay.discharge_ts IS NOT NULL AND stay.discharge_ts < stay.admission_ts)
+   OR stay.admission_mode NOT IN ('urgence', 'programme', 'mutation')
+   OR (NOT empty(stay.discharge_mode) AND stay.discharge_mode NOT IN ('domicile', 'mutation', 'transfert', 'deces'))
+   OR empty(patient.patient_sk)
+   OR (
+       stay.admission_ts IS NOT NULL
+       AND NOT empty(patient.patient_sk)
+       AND toYear(stay.admission_ts) NOT BETWEEN patient.birth_year AND patient.birth_year + 120
+   )
+   OR stay.service_code NOT IN
       (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
 INSERT INTO silver.fact_quality_events
@@ -305,23 +321,28 @@ prepared AS
 SELECT
     toUUID('{{RUN_ID}}'),
     'bronze.stays',
-    toString(stay_sk),
+    toString(stay.stay_sk),
     'MISSING_DISCHARGE_MODE',
     'WARNING',
     'Mode de sortie manquant pour un séjour terminé',
-    source_day,
-    source_file,
-    batch_id,
+    stay.source_day,
+    stay.source_file,
+    stay.batch_id,
     now64(6, 'UTC')
-FROM prepared
-WHERE discharge_ts IS NOT NULL
-  AND empty(discharge_mode)
-  AND admission_ts IS NOT NULL
-  AND discharge_ts >= admission_ts
-  AND admission_mode IN ('urgence', 'programme', 'mutation')
-  AND patient_sk IN
-      (SELECT patient_sk FROM silver.dim_patients FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
-  AND service_code IN
+FROM prepared AS stay
+INNER JOIN
+(
+    SELECT patient_sk, birth_year
+    FROM silver.dim_patients FINAL
+    WHERE run_id = toUUID('{{RUN_ID}}')
+) AS patient ON stay.patient_sk = patient.patient_sk
+WHERE stay.discharge_ts IS NOT NULL
+  AND empty(stay.discharge_mode)
+  AND stay.admission_ts IS NOT NULL
+  AND stay.discharge_ts >= stay.admission_ts
+  AND stay.admission_mode IN ('urgence', 'programme', 'mutation')
+  AND toYear(stay.admission_ts) BETWEEN patient.birth_year AND patient.birth_year + 120
+  AND stay.service_code IN
       (SELECT service_code FROM silver.dim_services FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
 INSERT INTO silver.fact_stay_diagnoses
@@ -343,19 +364,24 @@ WITH prepared AS
 )
 SELECT
     toUUID('{{RUN_ID}}'),
-    stay_sk,
-    code_cim10,
-    diagnosis_type,
-    source_day,
-    source_file,
-    batch_id,
+    diagnosis.stay_sk,
+    stay.patient_sk,
+    diagnosis.code_cim10,
+    diagnosis.diagnosis_type,
+    diagnosis.source_day,
+    diagnosis.source_file,
+    diagnosis.batch_id,
     now64(6, 'UTC')
-FROM prepared
-WHERE row_num = 1
-  AND diagnosis_type IN ('principal', 'associe')
-  AND stay_sk IN
-      (SELECT stay_sk FROM silver.fact_stays FINAL WHERE run_id = toUUID('{{RUN_ID}}'))
-  AND code_cim10 IN
+FROM prepared AS diagnosis
+INNER JOIN
+(
+    SELECT stay_sk, patient_sk
+    FROM silver.fact_stays FINAL
+    WHERE run_id = toUUID('{{RUN_ID}}')
+) AS stay ON diagnosis.stay_sk = stay.stay_sk
+WHERE diagnosis.row_num = 1
+  AND diagnosis.diagnosis_type IN ('principal', 'associe')
+  AND diagnosis.code_cim10 IN
       (SELECT code_cim10 FROM silver.dim_cim10 FINAL WHERE run_id = toUUID('{{RUN_ID}}'));
 
 INSERT INTO silver.fact_quality_events
